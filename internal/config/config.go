@@ -57,8 +57,21 @@ func Load(getenv func(string) string) (Config, error) {
 		if cfg.MaxAttempts, err = strconv.Atoi(v); err != nil {
 			return Config{}, fmt.Errorf("config: invalid MAX_ATTEMPTS %q: %w", v, err)
 		}
+		if cfg.MaxAttempts <= 0 {
+			return Config{}, fmt.Errorf("config: MAX_ATTEMPTS must be > 0, got %q", v)
+		}
 	}
 	return cfg, nil
+}
+
+// IsBanned reports whether name is in BannedUsers, ignoring case.
+func (c Config) IsBanned(name string) bool {
+	for _, b := range c.BannedUsers {
+		if strings.EqualFold(b, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // RequireBot checks the variables the bot command needs.
@@ -100,6 +113,9 @@ func duration(getenv func(string) string, key string, d time.Duration) (time.Dur
 	p, err := time.ParseDuration(v)
 	if err != nil {
 		return 0, fmt.Errorf("config: invalid %s %q: %w", key, v, err)
+	}
+	if p <= 0 {
+		return 0, fmt.Errorf("config: %s must be > 0, got %q", key, v)
 	}
 	return p, nil
 }

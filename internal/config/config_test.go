@@ -105,3 +105,32 @@ func TestRequireLegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestIsBanned_CaseInsensitive(t *testing.T) {
+	cfg, _ := Load(env(map[string]string{"DATABASE_URL": "x", "BANNED_USERS": "natr0n"}))
+	for name, want := range map[string]bool{"NATR0N": true, "natr0n": true, "other": false} {
+		if got := cfg.IsBanned(name); got != want {
+			t.Errorf("IsBanned(%q) = %v, want %v", name, got, want)
+		}
+	}
+	empty, _ := Load(env(map[string]string{"DATABASE_URL": "x"}))
+	if empty.IsBanned("natr0n") {
+		t.Error("empty list should ban nobody")
+	}
+}
+
+func TestLoad_RejectsNonPositive(t *testing.T) {
+	cases := map[string][]string{
+		"POLL_INTERVAL":         {"0s", "-1s"},
+		"COMMENT_SYNC_INTERVAL": {"0s", "-1s"},
+		"MAX_ATTEMPTS":          {"0"},
+	}
+	for k, vals := range cases {
+		for _, v := range vals {
+			_, err := Load(env(map[string]string{"DATABASE_URL": "x", k: v}))
+			if err == nil || !strings.Contains(err.Error(), k) {
+				t.Errorf("%s=%s: err = %v", k, v, err)
+			}
+		}
+	}
+}
