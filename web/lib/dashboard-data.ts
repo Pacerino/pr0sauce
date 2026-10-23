@@ -41,6 +41,16 @@ export type HistoryEntry = {
   createdAt: string;
   snapshot: unknown;
 };
+export type RecentCorrection = {
+  historyId: number;
+  itemId: number;
+  source: string;
+  actorName: string | null;
+  suggestionId: number | null;
+  createdAt: string;
+  before: { title: string; artist: string };
+  after: { title: string; artist: string };
+};
 export type AdminUser = { id: number; pr0UserId: number; name: string; role: string; bannedAt: string | null; reason: string | null };
 export type BotStatus = {
   health: unknown;

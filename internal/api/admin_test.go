@@ -336,3 +336,79 @@ func TestApprove_ModCannotApproveOwn(t *testing.T) {
 		t.Errorf("mod other = %d %s", code, body)
 	}
 }
+
+type blockingPr0 struct{}
+
+func (blockingPr0) ProfileInfo(ctx context.Context, _ string) (pr0gramm.Profile, error) {
+	<-ctx.Done()
+	return pr0gramm.Profile{}, ctx.Err()
+}
+
+func TestResolveProfile_TimesOut502(t *testing.T) {
+	pool := testdb.New(t)
+	q := db.New(pool)
+	s := newServer(q, pool, slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Options{InternalToken: testToken, AdminName: "Helix", Pr0: blockingPr0{}, Deezer: &fakeDeezer{}})
+	s.pr0Timeout = 100 * time.Millisecond
+	admin := login(t, s, 900, "Helix")
+	for _, c := range []struct{ method, path string }{{"POST", "/moderators"}, {"POST", "/bans"}} {
+		start := time.Now()
+		code, body := adminDo(t, s, admin.Token, c.method, c.path, map[string]string{"name": "slowpoke"})
+		if code != 502 || !strings.Contains(string(body), "pr0gramm nicht erreichbar") {
+			t.Errorf("%s = %d %s", c.path, code, body)
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("%s took %v", c.path, d)
+		}
+	}
+}
+
+func TestRecentCorrections(t *testing.T) {
+	s, q, _ := adminSetup(t, nil)
+	seedHit(t, q, 1)
+	author := login(t, s, 100, "author")
+	mod := login(t, s, 50, "modo")
+	makeMod(t, q, mod)
+	sid := suggest(t, s, author.Token, 1, "Fixed Title", "Fixed Artist")
+	if code, body := do(t, s, "POST", fmt.Sprintf("/api/internal/suggestions/%d/approve", sid), testToken, mod.Token, nil); code != 200 {
+		t.Fatalf("approve = %d %s", code, body)
+	}
+	_, hb := do(t, s, "GET", "/api/internal/songs/1/history", testToken, mod.Token, nil)
+	var hist []struct{ ID int64 }
+	if err := json.Unmarshal(hb, &hist); err != nil || len(hist) != 1 {
+		t.Fatalf("history %s", hb)
+	}
+	if code, body := do(t, s, "POST", "/api/internal/songs/1/revert", testToken, mod.Token, map[string]int64{"historyId": hist[0].ID}); code != 200 {
+		t.Fatalf("revert = %d %s", code, body)
+	}
+
+	if code, _ := do(t, s, "GET", "/api/internal/mod/recent", testToken, author.Token, nil); code != 403 {
+		t.Errorf("user = %d", code)
+	}
+	if code, _ := do(t, s, "GET", "/api/internal/mod/recent?offset=x", testToken, mod.Token, nil); code != 400 {
+		t.Errorf("bad offset = %d", code)
+	}
+	code, body := do(t, s, "GET", "/api/internal/mod/recent", testToken, mod.Token, nil)
+	var list []struct {
+		HistoryID    int64   `json:"historyId"`
+		ItemID       int64   `json:"itemId"`
+		Source       string  `json:"source"`
+		ActorName    *string `json:"actorName"`
+		SuggestionID *int64  `json:"suggestionId"`
+		Before       struct{ Title, Artist string }
+		After        struct{ Title, Artist string }
+	}
+	if code != 200 || json.Unmarshal(body, &list) != nil || len(list) != 2 {
+		t.Fatalf("mod = %d %s", code, body)
+	}
+	rev, appr := list[0], list[1]
+	if rev.Source != "revert" || rev.Before.Title != "Fixed Title" || rev.After.Title != "Bot Title" || rev.ActorName == nil || *rev.ActorName != "modo" {
+		t.Errorf("newest %+v", rev)
+	}
+	if appr.Source != "moderator" || appr.Before.Title != "Bot Title" || appr.After.Title != "Fixed Title" || appr.SuggestionID == nil || *appr.SuggestionID != sid || appr.HistoryID >= rev.HistoryID {
+		t.Errorf("older %+v", appr)
+	}
+	if code, body := do(t, s, "GET", "/api/internal/mod/recent?offset=1", testToken, mod.Token, nil); code != 200 || strings.Count(string(body), "historyId") != 1 {
+		t.Errorf("offset = %d %s", code, body)
+	}
+}

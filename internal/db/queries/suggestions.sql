@@ -103,3 +103,21 @@ order by v.created_at desc, v.user_id desc;
 -- name: CountMarkReadBacklog :one
 select count(*)::bigint from requests
 where status in ('done', 'skipped', 'failed') and marked_read = false;
+
+-- name: ListRecentCorrections :many
+-- Automatic or moderator-made changes, newest first. "after" is the snapshot
+-- of the item's next history row, or the current song for the newest one.
+select h.id, h.item_id, h.source, h.suggestion_id, h.created_at, u.name as actor_name,
+  coalesce(h.snapshot->>'title', '')::text as before_title,
+  coalesce(h.snapshot->>'artist', '')::text as before_artist,
+  coalesce(nx.snapshot->>'title', so.title, '')::text as after_title,
+  coalesce(nx.snapshot->>'artist', so.artist, '')::text as after_artist
+from song_history h
+left join users u on u.id = h.actor_id
+left join songs so on so.item_id = h.item_id
+left join lateral (
+  select n.snapshot from song_history n where n.item_id = h.item_id and n.id > h.id order by n.id limit 1
+) nx on true
+where h.source in ('vote', 'moderator', 'revert')
+order by h.id desc
+limit sqlc.arg(lim)::int offset sqlc.arg(off)::int;

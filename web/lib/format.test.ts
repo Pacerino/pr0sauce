@@ -39,6 +39,8 @@ describe("providerLabel", () => {
     ["shazam", "Shazam"],
     ["acrcloud", "ACRCloud"],
     ["auddio", "audd.io"],
+    ["community", "Community"],
+    ["moderation", "Moderation"],
     ["", "unbekannt"],
     ["foo", "unbekannt"],
   ])("%s -> %s", (p, label) => expect(providerLabel(p)).toBe(label));

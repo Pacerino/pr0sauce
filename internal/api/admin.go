@@ -19,6 +19,7 @@ const (
 	adminPageSize    = 50
 	maxAdminOffset   = 10000
 	botHealthTimeout = 3 * time.Second
+	pr0LookupTimeout = 5 * time.Second
 	maxHealthBody    = 64 << 10
 	reasonBanned     = "gesperrt"
 
@@ -35,6 +36,7 @@ func (s *server) routeAdmin() {
 	s.mux.Handle("DELETE "+p+"/bans/{userId}", s.internal(s.requireAdmin(s.unbanUser)))
 	s.mux.Handle("GET "+p+"/bot", s.internal(s.requireAdmin(s.botStatus)))
 	s.mux.Handle("GET "+p+"/failed", s.internal(s.requireAdmin(s.failedRequests)))
+	s.mux.Handle("GET /api/internal/mod/recent", s.internal(s.requireMod(s.recentCorrections)))
 	s.mux.Handle("GET /api/internal/suggestions/{id}/votes", s.internal(s.requireMod(s.suggestionVotes)))
 }
 
@@ -78,6 +80,15 @@ func parseOffset(w http.ResponseWriter, r *http.Request) (int32, bool) {
 	return int32(n), true
 }
 
+// lookupTimeout bounds the pr0gramm name lookup so it ends well inside the
+// web's 10 s fetch timeout and the API's WriteTimeout.
+func (s *server) lookupTimeout() time.Duration {
+	if s.pr0Timeout > 0 {
+		return s.pr0Timeout
+	}
+	return pr0LookupTimeout
+}
+
 // resolveProfile maps a submitted pr0gramm name to its profile, answering the
 // error itself (and returning false) when it cannot.
 func (s *server) resolveProfile(w http.ResponseWriter, r *http.Request, name string) (pr0gramm.Profile, bool) {
@@ -90,7 +101,9 @@ func (s *server) resolveProfile(w http.ResponseWriter, r *http.Request, name str
 		writeError(w, http.StatusServiceUnavailable, "pr0gramm-Abfrage nicht konfiguriert")
 		return pr0gramm.Profile{}, false
 	}
-	p, err := s.pr0.ProfileInfo(r.Context(), name)
+	ctx, cancel := context.WithTimeout(r.Context(), s.lookupTimeout())
+	defer cancel()
+	p, err := s.pr0.ProfileInfo(ctx, name)
 	switch {
 	case err == nil && p.ID > 0 && strings.TrimSpace(p.Name) != "":
 		return p, true
@@ -403,6 +416,43 @@ func (s *server) suggestionVotes(w http.ResponseWriter, r *http.Request, _ db.Us
 	out := make([]voteJSON, 0, len(rows))
 	for _, v := range rows {
 		out = append(out, voteJSON{UserID: v.UserID, Name: v.Name, Value: v.Value, Banned: v.Banned, CreatedAt: fmtTime(v.CreatedAt)})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+type songTextJSON struct {
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
+}
+
+func (s *server) recentCorrections(w http.ResponseWriter, r *http.Request, _ db.User) {
+	off, ok := parseOffset(w, r)
+	if !ok {
+		return
+	}
+	rows, err := s.q.ListRecentCorrections(r.Context(), db.ListRecentCorrectionsParams{Off: off, Lim: adminPageSize})
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	type recentJSON struct {
+		HistoryID    int64        `json:"historyId"`
+		ItemID       int64        `json:"itemId"`
+		Source       string       `json:"source"`
+		ActorName    *string      `json:"actorName"`
+		SuggestionID *int64       `json:"suggestionId"`
+		CreatedAt    string       `json:"createdAt"`
+		Before       songTextJSON `json:"before"`
+		After        songTextJSON `json:"after"`
+	}
+	out := make([]recentJSON, 0, len(rows))
+	for _, h := range rows {
+		out = append(out, recentJSON{
+			HistoryID: h.ID, ItemID: h.ItemID, Source: h.Source, ActorName: h.ActorName,
+			SuggestionID: h.SuggestionID, CreatedAt: fmtTime(h.CreatedAt),
+			Before: songTextJSON{Title: h.BeforeTitle, Artist: h.BeforeArtist},
+			After:  songTextJSON{Title: h.AfterTitle, Artist: h.AfterArtist},
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

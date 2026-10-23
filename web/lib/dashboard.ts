@@ -81,3 +81,17 @@ export function mapModError(status: number, apiError: string | undefined): strin
       return "Das hat leider nicht geklappt";
   }
 }
+
+/** Label for a song_history source in the "Letzte Korrekturen" list. */
+export function recentSourceLabel(source: string): string {
+  switch (source) {
+    case "vote":
+      return "Abstimmung";
+    case "moderator":
+      return "Moderation";
+    case "revert":
+      return "Zurückgesetzt";
+    default:
+      return "Unbekannt";
+  }
+}

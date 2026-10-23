@@ -468,6 +468,74 @@ func (q *Queries) ListOpenSuggestionsForItem(ctx context.Context, itemID int64) 
 	return items, nil
 }
 
+const listRecentCorrections = `-- name: ListRecentCorrections :many
+select h.id, h.item_id, h.source, h.suggestion_id, h.created_at, u.name as actor_name,
+  coalesce(h.snapshot->>'title', '')::text as before_title,
+  coalesce(h.snapshot->>'artist', '')::text as before_artist,
+  coalesce(nx.snapshot->>'title', so.title, '')::text as after_title,
+  coalesce(nx.snapshot->>'artist', so.artist, '')::text as after_artist
+from song_history h
+left join users u on u.id = h.actor_id
+left join songs so on so.item_id = h.item_id
+left join lateral (
+  select n.snapshot from song_history n where n.item_id = h.item_id and n.id > h.id order by n.id limit 1
+) nx on true
+where h.source in ('vote', 'moderator', 'revert')
+order by h.id desc
+limit $2::int offset $1::int
+`
+
+type ListRecentCorrectionsParams struct {
+	Off int32
+	Lim int32
+}
+
+type ListRecentCorrectionsRow struct {
+	ID           int64
+	ItemID       int64
+	Source       string
+	SuggestionID *int64
+	CreatedAt    time.Time
+	ActorName    *string
+	BeforeTitle  string
+	BeforeArtist string
+	AfterTitle   string
+	AfterArtist  string
+}
+
+// Automatic or moderator-made changes, newest first. "after" is the snapshot
+// of the item's next history row, or the current song for the newest one.
+func (q *Queries) ListRecentCorrections(ctx context.Context, arg ListRecentCorrectionsParams) ([]ListRecentCorrectionsRow, error) {
+	rows, err := q.db.Query(ctx, listRecentCorrections, arg.Off, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentCorrectionsRow
+	for rows.Next() {
+		var i ListRecentCorrectionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemID,
+			&i.Source,
+			&i.SuggestionID,
+			&i.CreatedAt,
+			&i.ActorName,
+			&i.BeforeTitle,
+			&i.BeforeArtist,
+			&i.AfterTitle,
+			&i.AfterArtist,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUserVotesForItem = `-- name: ListUserVotesForItem :many
 select v.suggestion_id, v.value from votes v join suggestions s on s.id = v.suggestion_id
 where s.item_id = $1 and v.user_id = $2 and s.status = 'open'

@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Flash } from "@/components/Flash";
-import { changedFields } from "@/lib/dashboard";
-import { modGet, parseOffset, type QueueItem, type QueuePage, type Vote } from "@/lib/dashboard-data";
+import { changedFields, recentSourceLabel } from "@/lib/dashboard";
+import { modGet, parseOffset, type QueueItem, type QueuePage, type RecentCorrection, type Vote } from "@/lib/dashboard-data";
 import { relativeTimeDe, safeHttpUrl } from "@/lib/format";
 import { approveAction, rejectAction } from "./actions";
 
@@ -119,6 +119,30 @@ function Card({ s, votes, offset, now }: { s: QueueItem; votes: Vote[] | null; o
   );
 }
 
+function Recent({ r, votes, now }: { r: RecentCorrection; votes: Vote[] | null | undefined; now: Date }) {
+  return (
+    <li className="rounded bg-[#1f2124] p-3 text-sm">
+      <div className="mb-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-[#888]">
+        <span>
+          {recentSourceLabel(r.source)} · {r.actorName ?? "System"} · {relativeTimeDe(r.createdAt, now)}
+        </span>
+        <span>#{r.itemId}</span>
+        <Link href={`/dashboard/songs/${r.itemId}`} className="text-accent hover:underline">
+          Verlauf
+        </Link>
+      </div>
+      <div className="break-words">
+        <span className="text-[#aaa]">
+          {r.before.title || "–"} – {r.before.artist || "–"}
+        </span>
+        {" → "}
+        {r.after.title || "–"} – {r.after.artist || "–"}
+      </div>
+      {r.source === "vote" && r.suggestionId !== null && votes !== undefined && <Votes votes={votes} />}
+    </li>
+  );
+}
+
 export default async function QueuePageView({ searchParams }: Props) {
   const sp = await searchParams;
   const offset = parseOffset(sp.offset);
@@ -128,6 +152,19 @@ export default async function QueuePageView({ searchParams }: Props) {
   const items = page && Array.isArray(page.items) ? page.items : null;
   const votes = items
     ? await Promise.all(items.map((s) => modGet<Vote[]>(`/api/internal/suggestions/${s.id}/votes`)))
+    : [];
+
+  const roffset = parseOffset(sp.roffset);
+  const recent = await modGet<RecentCorrection[]>(`/api/internal/mod/recent?offset=${roffset}`);
+  const recentRows = Array.isArray(recent) ? recent : null;
+  const recentVotes = recentRows
+    ? await Promise.all(
+        recentRows.map((r) =>
+          r.source === "vote" && r.suggestionId !== null
+            ? modGet<Vote[]>(`/api/internal/suggestions/${r.suggestionId}/votes`)
+            : Promise.resolve(undefined),
+        ),
+      )
     : [];
 
   return (
@@ -149,6 +186,25 @@ export default async function QueuePageView({ searchParams }: Props) {
         <p className="mt-4">
           <Link href={`/dashboard?offset=${page.nextOffset}`} className="text-accent hover:underline">
             Weiter
+          </Link>
+        </p>
+      )}
+      <h2 className="mt-10 mb-3 text-lg font-bold">Letzte Korrekturen</h2>
+      {recentRows === null ? (
+        <p className="text-[#888]">Die letzten Korrekturen sind gerade nicht verfügbar.</p>
+      ) : recentRows.length === 0 ? (
+        <p className="text-[#888]">Noch keine Korrekturen.</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {recentRows.map((r, i) => (
+            <Recent key={r.historyId} r={r} votes={recentVotes[i]} now={now} />
+          ))}
+        </ul>
+      )}
+      {recentRows && recentRows.length >= 50 && (
+        <p className="mt-4">
+          <Link href={`/dashboard?roffset=${roffset + 50}`} className="text-accent hover:underline">
+            Ältere Korrekturen
           </Link>
         </p>
       )}

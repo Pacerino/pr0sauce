@@ -49,6 +49,10 @@ export function providerLabel(p: string): string {
       return "ACRCloud";
     case "auddio":
       return "audd.io";
+    case "community":
+      return "Community";
+    case "moderation":
+      return "Moderation";
     default:
       return "unbekannt";
   }

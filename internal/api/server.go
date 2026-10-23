@@ -26,6 +26,7 @@ type server struct {
 	adminName     string
 	botHealthURL  string
 	pr0           Pr0Lookup
+	pr0Timeout    time.Duration // test override; zero = pr0LookupTimeout
 	deezer        DeezerSearch
 
 	statsMu      sync.Mutex

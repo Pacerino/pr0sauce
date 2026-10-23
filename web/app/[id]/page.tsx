@@ -1,9 +1,12 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { cache } from "react";
 import { Cover } from "@/components/Cover";
 import { Suggestions } from "@/components/Suggestions";
 import { api } from "@/lib/api";
+import { canModerate, parseRole } from "@/lib/dashboard";
+import { getCurrentUser } from "@/lib/session";
 import { formatDateDe, providerLabel } from "@/lib/format";
 import { parseItemId } from "@/lib/ids";
 import { buttonClass, streamingButtons } from "@/lib/links";
@@ -28,6 +31,8 @@ export default async function SongPage({ params }: Props) {
   if (id === null) notFound();
   const song = await getSong(id);
   if (!song) notFound();
+  const user = await getCurrentUser();
+  const isMod = user !== null && !user.banned && canModerate(parseRole(user.role));
 
   return (
     <article>
@@ -49,7 +54,7 @@ export default async function SongPage({ params }: Props) {
             </>
           )}
           <div className="my-2 flex flex-wrap gap-1.5">
-            {song.found && (
+            {song.found && !song.corrected && (
               <span className="rounded-full bg-surface px-2 py-0.5 text-[11px] text-[#aaa]">
                 erkannt via {providerLabel(song.provider)}
               </span>
@@ -93,6 +98,11 @@ export default async function SongPage({ params }: Props) {
           </div>
         </a>
         <Suggestions itemId={song.itemId} />
+        {isMod && (
+          <Link href={`/dashboard/songs/${song.itemId}`} className="text-xs text-accent hover:underline">
+            Verlauf (Moderation)
+          </Link>
+        )}
       </div>
     </article>
   );

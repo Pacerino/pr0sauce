@@ -279,11 +279,14 @@
 
   Commit, push, and wait for CI to go green.
 - [ ] **Step 2 (owner):** **Regenerate the OAuth client secret** with pr0gramm, because the old one was pasted in chat. Keep the new one ready for the server `.env`, and **don't paste it into chat**.
-- [ ] **Step 3: [OWNER OK]** On `$PROD_HOST`, in `/opt/pr0sauce/v2/.env`:
-  1. Add `INTERNAL_API_TOKEN=$(openssl rand -hex 32)`, `ADMIN_PR0_NAME=Helix`, `PR0_OAUTH_CLIENT_ID=644` and `PUBLIC_URL=https://pr0sauce.info`.
-  2. The owner adds `PR0_OAUTH_CLIENT_SECRET` themselves, via `ssh` + editor.
-  3. Set `TAG=sha-<new>`, `docker compose pull -q`, then `docker compose run --rm migrate` (expect `OK 00003_accounts.sql`).
-  4. Run `docker compose up -d`, and check all services are healthy.
+- [ ] **Step 3: [OWNER OK]** On `$PROD_HOST`, in `/opt/pr0sauce/v2/`. Order matters: both env files and both tokens must be in place before `docker compose up -d`, otherwise the api crash-loops on a missing token and takes the site down.
+  1. Generate one token with `openssl rand -hex 32` (at least 32 chars). Put the same value into both files, never into chat or commits.
+  2. Create `web.env` (git-ignored, template `web.env.example`) **before** any `docker compose pull/up`. It holds `PR0_OAUTH_CLIENT_ID=644`, `PR0_OAUTH_CLIENT_SECRET`, `PUBLIC_URL=https://pr0sauce.info` and `INTERNAL_API_TOKEN`. The web service reads only this file.
+  3. The owner types `PR0_OAUTH_CLIENT_SECRET` into `web.env` themselves, via `ssh` + editor. **Never put the OAuth secret into `.env`**: the Go containers (bot, api, migrate) read all of `.env`.
+  4. In `.env` add `INTERNAL_API_TOKEN` (same value as in `web.env`) and `ADMIN_PR0_NAME=Helix`.
+  5. Set `TAG=sha-<new>` and run `docker compose pull -q`.
+  6. Run `docker compose run --rm migrate` (expect `OK 00003_accounts.sql`).
+  7. Only now run `docker compose up -d`, and check all services are healthy.
 - [ ] **Step 4: Live test (owner):**
   1. Log in as **Helix**. The nav shows `Dashboard`, and the admin page loads with bot health.
   2. Add a moderator by name, then remove it.

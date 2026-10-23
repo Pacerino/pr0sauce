@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canSeeAdmin, changedFields, formatHealth, parseRole, validatePr0Name, validateReason, mapModError } from "./dashboard";
+import { canSeeAdmin, changedFields, formatHealth, parseRole, recentSourceLabel, validatePr0Name, validateReason, mapModError } from "./dashboard";
 
 describe("parseRole", () => {
   it("accepts the three roles", () => {
@@ -83,4 +83,14 @@ describe("mapModError", () => {
     expect(mapModError(403, "forbidden")).toBe("Nicht erlaubt");
     expect(mapModError(500, "boom")).toBe("Das hat leider nicht geklappt");
   });
+});
+
+describe("recentSourceLabel", () => {
+  it.each([
+    ["vote", "Abstimmung"],
+    ["moderator", "Moderation"],
+    ["revert", "Zurückgesetzt"],
+    ["suggestion", "Unbekannt"],
+    ["", "Unbekannt"],
+  ])("%s -> %s", (s, label) => expect(recentSourceLabel(s)).toBe(label));
 });
