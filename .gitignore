@@ -1,0 +1,7 @@
+/legacy/
+/.superpowers/
+node_modules/
+.next/
+.env
+__pycache__/
+.venv/
