@@ -89,8 +89,9 @@ func runImportLegacy(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("import-legacy: Songs=%d Hits=%d DuplicatesDropped=%d Comments=%d\n",
-		rep.Songs, rep.Hits, rep.DuplicatesDropped, rep.Comments)
+	fmt.Printf("import-legacy: Songs=%d Hits=%d DuplicatesDropped=%d Comments=%d DatesFromCreated=%d DatesFromComment=%d DatesFromUpdated=%d DatesEstimated=%d\n",
+		rep.Songs, rep.Hits, rep.DuplicatesDropped, rep.Comments,
+		rep.DatesFromCreated, rep.DatesFromComment, rep.DatesFromUpdated, rep.DatesEstimated)
 	return nil
 }
 

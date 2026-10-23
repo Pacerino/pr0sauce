@@ -81,7 +81,7 @@ insert into pr0music.comments (created_at, comment_id, up, down, content, create
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (legacy.Report{Songs: 3, Hits: 2, DuplicatesDropped: 2, Comments: 1}); rep != want {
+	if want := (legacy.Report{Songs: 3, Hits: 2, DuplicatesDropped: 2, Comments: 1, DatesFromCreated: 3}); rep != want {
 		t.Fatalf("report = %+v, want %+v", rep, want)
 	}
 
@@ -155,30 +155,67 @@ insert into pr0music.comments (created_at, comment_id, up, down, content, create
 	assertEmpty(t, dst)
 }
 
-func TestImport_NullTimestampAborts(t *testing.T) {
+func TestImport_NullCommentCreatedAborts(t *testing.T) {
 	ctx := context.Background()
 	src := newSource(t)
 	dst := testdb.New(t)
-	log := slog.New(slog.NewTextHandler(io.Discard, nil))
-
-	_, err := src.Exec(ctx, `insert into pr0music.items (created_at, item_id, title, provider) values (null, 1, 'A', 'x')`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = legacy.Import(ctx, src, dst, log, false); err == nil || !strings.Contains(err.Error(), "created_at") {
-		t.Fatalf("items: err = %v", err)
-	}
-	assertEmpty(t, dst)
-
-	_, err = src.Exec(ctx, `
-update pr0music.items set created_at = now();
+	_, err := src.Exec(ctx, `
+insert into pr0music.items (created_at, item_id, title, provider) values (now(), 1, 'A', 'x');
 insert into pr0music.comments (created_at, comment_id, up, down, content, created, item_id)
  values (now(), 555, 0, 0, 'c', null, 1)`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = legacy.Import(ctx, src, dst, log, false); err == nil || !strings.Contains(err.Error(), "555") {
-		t.Fatalf("comments: err = %v", err)
+	_, err = legacy.Import(ctx, src, dst, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	if err == nil || !strings.Contains(err.Error(), "555") {
+		t.Fatalf("err = %v", err)
 	}
 	assertEmpty(t, dst)
+}
+
+func TestImport_RecognizedAtFallback(t *testing.T) {
+	ctx := context.Background()
+	src := newSource(t)
+	dst := testdb.New(t)
+	// item 1: undated, nothing else -> leading, takes next dated (item 2)
+	// item 2: created_at
+	// item 3: no created_at, earliest comment (two comments, earlier wins)
+	// item 4: no created_at, no comment, updated_at
+	// item 5: nothing -> estimated from nearest lower resolved (item 4)
+	// item 6: created_at (later than 4) ; item 7 nothing -> takes item 6
+	_, err := src.Exec(ctx, `
+insert into pr0music.items (created_at, updated_at, item_id, title, provider) values
+ (null, null, 1, 'a', 'x'),
+ ('2024-01-01T00:00:00Z', null, 2, 'b', 'x'),
+ (null, '2025-01-01T00:00:00Z', 3, 'c', 'x'),
+ (null, '2024-06-01T00:00:00Z', 4, 'd', 'x'),
+ (null, null, 5, 'e', 'x'),
+ ('2024-09-01T00:00:00Z', null, 6, 'f', 'x'),
+ (null, null, 7, 'g', 'x');
+insert into pr0music.comments (created_at, comment_id, up, down, content, created, item_id) values
+ (now(), 10, 0, 0, 'c', '2024-03-02T00:00:00Z', 3),
+ (now(), 11, 0, 0, 'c', '2024-03-01T00:00:00Z', 3)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rep, err := legacy.Import(ctx, src, dst, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := legacy.Report{Songs: 7, Hits: 7, Comments: 2, DatesFromCreated: 2, DatesFromComment: 1, DatesFromUpdated: 1, DatesEstimated: 3}
+	if rep != want {
+		t.Fatalf("report = %+v, want %+v", rep, want)
+	}
+	exp := map[int64]string{1: "2024-01-01", 2: "2024-01-01", 3: "2024-03-01", 4: "2024-06-01",
+		5: "2024-06-01", 6: "2024-09-01", 7: "2024-09-01"}
+	q := db.New(dst)
+	for id, d := range exp {
+		s, err := q.GetSong(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := s.RecognizedAt.UTC().Format("2006-01-02"); got != d {
+			t.Errorf("item %d recognized_at = %s, want %s", id, got, d)
+		}
+	}
 }

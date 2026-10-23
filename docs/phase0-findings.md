@@ -85,11 +85,13 @@ All commands ran on the host with the bot credentials sourced from `/opt/pr0sauc
 
 ## Task 4 dry run (local)
 
-`import-legacy` from a restored `pg_dump -Fc` of the legacy database (postgres:13) into a fresh, migrated postgres:18. The import ran in one transaction in about 11 s.
+`import-legacy` from a restored `pg_dump -Fc` of the legacy database (postgres:13) into a fresh, migrated postgres:18. The import ran in one transaction in about 11-21 s.
 
 - Songs: 57503
 - Hits (non-NULL title): 46704
 - DuplicatesDropped: 55
 - Comments: 55228
+- recognized_at sources: created_at 46051, earliest comment 10541, updated_at 169, estimated from neighbour 742
+- Songs with recognized_at before 2020-01-01: 0
 
-These match the expected values. A second run without `--force` refused with "songs is not empty". The legacy `comments.created` column is `timestamptz` (not an epoch), so it maps straight to `bot_comments.created_at`.
+These match the expected values. 11452 legacy items have a NULL `created_at`, so `recognized_at` uses a fallback chain: `created_at`, then the earliest comment, then `updated_at`, then the nearest lower resolved item (nearest higher if none). A second run without `--force` refused with "songs is not empty". The legacy `comments.created` column is `timestamptz` (not an epoch), so it maps straight to `bot_comments.created_at`.
