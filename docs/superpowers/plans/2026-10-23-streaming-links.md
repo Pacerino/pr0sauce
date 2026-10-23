@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the dead song.link API (`401 PUBLIC_API_ACCESS_DEPRECATED`, retired 2026-07-31) with streaming links that need no key: Apple Music (direct, from Shazam), Deezer (exact, by ISRC), a link to the song.link **web page**, and a Spotify **search** link.
+**Goal:** Replace the dead song.link API (`401 PUBLIC_API_ACCESS_DEPRECATED`, retired 2026-07-31) with streaming links that need no key: Apple Music (direct, from Shazam), Deezer (exact, by ISRC), a link to the song.link **web page**, and Spotify and YouTube **search** links.
 
-**Architecture:** The bot stores `apple_music_url`, `isrc` and `deezer_url` per song. The API derives two more links per song (`songLinkUrl`, `spotifySearchUrl`), and the web song page renders the buttons. `internal/odesli` is deleted.
+**Architecture:** The bot stores `apple_music_url`, `isrc` and `deezer_url` per song. The API derives three more links per song (`songLinkUrl`, `spotifySearchUrl`, `youtubeSearchUrl`), and the web song page renders the buttons. `internal/odesli` is deleted.
 
 **Tech Stack:** unchanged (Go 1.27 + pgx/sqlc/goose, Next.js 16.4.3).
 
@@ -21,14 +21,14 @@
 - Legacy columns `spotify_url`, `spotify_id`, `youtube_url` and `youtube_id` stay. New songs leave them NULL.
 - The bot's reply texts and tags on pr0gramm are unchanged. Links appear only on the website.
 - Every external URL rendered on the web goes through the existing `safeHttpUrl`.
-- German UI labels exactly: `Spotify`, `Auf Spotify suchen`, `Apple Music`, `Deezer`, `YouTube`, `Alle Plattformen`.
+- German UI labels exactly: `Spotify`, `Auf Spotify suchen`, `Apple Music`, `Deezer`, `YouTube`, `Auf YouTube suchen`, `Alle Plattformen`.
 
 ## Review Focus
 
 1. **Deezer answers 200 with `{"error":…}` for an unknown ISRC.** That must mean "no link", not an error and not a broken URL. Test: `TestDeezer_UnknownISRCIsNotFound` (Task 1).
 2. **Shazam match without ISRC, or Deezer down/slow.** The song is still stored and replied to, with no Deezer link and no retry. Test: `TestProcess_DeezerFailureStillReplies` (Task 2).
 3. **Apple URL without an `i=` track id** (an album link, or a malformed one). `songLinkUrl` is null, not `song.link/i/`. Test: `TestSongLinkURL_NoTrackID` (Task 3).
-4. **Titles or artists with `&`, `/`, `?`, `#` or Cyrillic** in the Spotify search link must be fully encoded. Test: `TestSpotifySearchURL_Escaping` (Task 3).
+4. **Titles or artists with `&`, `/`, `?`, `#` or Cyrillic** in the Spotify and YouTube search links must be fully encoded. Tests: `TestSpotifySearchURL_Escaping` and `TestYouTubeSearchURL_Escaping` (Task 3).
 5. **Deploy order.** Migration 00002 must run before the new bot and api. Covered by the compose `depends_on: migrate` and verified in Task 5 Step 2.
 
 ---
@@ -90,38 +90,40 @@
   - `deezerUrl`
   - `songLinkUrl` = `"https://song.link/i/" + <i param>` when the Apple URL parses and has a numeric `i` query param, otherwise null
   - `spotifySearchUrl` = `"https://open.spotify.com/search/" + url.PathEscape(artist + " " + title)` for every hit (legacy songs too)
-- Helpers in links.go: `songLinkURL(apple *string) *string`, `spotifySearchURL(artist, title string) string`.
+  - `youtubeSearchUrl` = `"https://www.youtube.com/results?search_query=" + url.QueryEscape(artist + " " + title)` for every hit
+- Helpers in links.go: `songLinkURL(apple *string) *string`, `spotifySearchURL(artist, title string) string`, `youtubeSearchURL(artist, title string) string`.
 
 - [ ] **Step 1: Write the failing tests.**
   - `TestSongLinkURL`: the Kumite Apple URL → `https://song.link/i/1597618301`.
   - `TestSongLinkURL_NoTrackID`: `…/album/x/1597617995` without `i`, `i=abc`, nil, and `"::"` → nil.
   - `TestSpotifySearchURL_Escaping`: artist `AC/DC`, title `Rock & Roll Ain't Noise Pollution?` → contains no raw `&`, `/` (after `/search/`), `?` or `#`, and round-trips via `url.PathUnescape` to `AC/DC Rock & Roll Ain't Noise Pollution?`. Also Cyrillic `Новая патриотическая`.
-  - `TestGetSong_IncludesStreamingLinks`: a seeded song with Apple and Deezer has all four new fields. A legacy song with only spotify_url has appleMusicUrl, deezerUrl and songLinkUrl null, and spotifySearchUrl set.
+  - `TestYouTubeSearchURL_Escaping`: the same inputs. The query value round-trips via `url.ParseQuery`, and the URL has exactly one `?` and no raw `&` beyond the query start.
+  - `TestGetSong_IncludesStreamingLinks`: a seeded song with Apple and Deezer has all five new fields. A legacy song with only spotify_url has appleMusicUrl, deezerUrl and songLinkUrl null, and spotifySearchUrl and youtubeSearchUrl set.
 - [ ] **Step 2:** Run `go test ./internal/api/` and expect FAIL.
 - [ ] **Step 3:** Implement. The list endpoints include the same fields, for consistency.
 - [ ] **Step 4:** Run `go test -count=1 ./internal/api/ && go vet ./...` and expect PASS.
-- [ ] **Step 5:** Commit with `feat(api): apple music, deezer, song.link and spotify search links`.
+- [ ] **Step 5:** Commit with `feat(api): apple music, deezer, song.link and search links`.
 
 ### Task 4: Web song page buttons
 
 **Files:**
-- Modify: `web/lib/types.ts` (Song gets the 4 fields), `web/app/[id]/page.tsx` (the buttons), `web/lib/api.test.ts` or a new `web/lib/links.test.ts` if helpers are added
+- Modify: `web/lib/types.ts` (Song gets the 5 fields), `web/app/[id]/page.tsx` (the buttons), `web/lib/api.test.ts` or a new `web/lib/links.test.ts` if helpers are added
 
 **Behavior:** The button row, left to right. Each button is shown only if its URL passes `safeHttpUrl`, and all open with `target="_blank" rel="noopener noreferrer"`.
 1. `Spotify` → `spotifyUrl` (legacy exact link). If it's absent, `Auf Spotify suchen` → `spotifySearchUrl`. Spotify green.
 2. `Apple Music` → `appleMusicUrl`. Colour `#fa243c`.
 3. `Deezer` → `deezerUrl`. Colour `#a238ff`.
-4. `YouTube` → `youtubeUrl` (legacy only). Red, as today.
+4. `YouTube` → `youtubeUrl` (legacy exact link). If it's absent, `Auf YouTube suchen` → `youtubeSearchUrl`. Red, as today.
 5. `Alle Plattformen` → `songLinkUrl`. Neutral surface colour with the accent border.
 
 - [ ] **Step 1: Write the failing test.** Extract `streamingButtons(song: Song): {label: string, href: string}[]` into `web/lib/links.ts` and test it:
-  - a legacy song with spotifyUrl+youtubeUrl → `[Spotify, YouTube]`, plus `Auf Spotify suchen` is NOT added
-  - a new song with apple+deezer+songLink+spotifySearch → `[Auf Spotify suchen, Apple Music, Deezer, Alle Plattformen]`
+  - a legacy song with spotifyUrl+youtubeUrl → `[Spotify, YouTube]`, plus neither search button is added
+  - a new song with apple+deezer+songLink+both search URLs → `[Auf Spotify suchen, Apple Music, Deezer, Auf YouTube suchen, Alle Plattformen]`
   - a `javascript:` deezerUrl → dropped
 - [ ] **Step 2:** Run `cd web && npx vitest run` and expect FAIL.
 - [ ] **Step 3:** Implement, and render from `streamingButtons` in the song page.
 - [ ] **Step 4:** Run `npx vitest run && npm run build` and expect PASS.
-- [ ] **Step 5:** Commit with `feat(web): apple music, deezer, song.link and spotify search buttons`.
+- [ ] **Step 5:** Commit with `feat(web): apple music, deezer, song.link and search buttons`.
 
 ### Task 5: Deploy [OWNER OK]
 
@@ -133,7 +135,7 @@
   4. Run `docker compose up -d bot api web`.
   5. Run `docker compose ps`. Expect all services healthy.
 - [ ] **Step 3: Verify.**
-  - `docker exec traefik wget -qO- --no-check-certificate --header 'Host: pr0sauce.info' https://127.0.0.1/6796145` contains `Auf Spotify suchen` or `Spotify`.
+  - `docker exec traefik wget -qO- --no-check-certificate --header 'Host: pr0sauce.info' https://127.0.0.1/6796145` contains `Spotify` and `YouTube`. Kumite has legacy exact links for both.
   - A real hit recognized after the deploy has `apple_music_url` and `isrc` set in `songs`, and `deezer_url` set when Deezer knows the ISRC.
   - The owner opens one new song page in the browser.
-- [ ] **Step 4:** Update the spec §5.3 "Links" paragraph to describe Apple Music + Deezer + song.link page + Spotify search (song.link API retired). Commit with `docs: streaming links after song.link API retirement`.
+- [ ] **Step 4:** Update the spec §5.3 "Links" paragraph to describe Apple Music + Deezer + song.link page + Spotify and YouTube search (song.link API retired). Commit with `docs: streaming links after song.link API retirement`.
