@@ -10,6 +10,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -30,14 +32,17 @@ var discard = slog.New(slog.NewTextHandler(io.Discard, nil))
 // cookie equals goodCookie (or acceptAll is set).
 type fakeServer struct {
 	*httptest.Server
-	mu         sync.Mutex
-	goodCookie string
-	acceptAll  bool
-	cloudflare bool // /user/identifier answers an HTML 403
-	loginOK    bool
-	lastForm   map[string]string
+	mu          sync.Mutex
+	goodCookie  string
+	acceptAll   bool
+	cloudflare  bool // /user/identifier answers an HTML 403
+	loginOK     bool
+	lastForm    map[string]string
+	loginCookie string // cookie value login sets; empty means goodCookie
+	rotateTo    string // when set, the next inbox response rotates the session cookie to this
+	captcha     string // captcha image; empty means a data URI
 
-	logins, inbox, idents atomic.Int32
+	logins, inbox, idents, items atomic.Int32
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -81,6 +86,9 @@ func newFakeServer(t *testing.T) *fakeServer {
 			f.lastForm[k] = r.PostForm.Get(k)
 		}
 		ok, good := f.loginOK, f.goodCookie
+		if f.loginCookie != "" {
+			good = f.loginCookie
+		}
 		f.mu.Unlock()
 		if !ok {
 			io.WriteString(w, `{"success":false,"error":"invalid"}`)
@@ -90,7 +98,13 @@ func newFakeServer(t *testing.T) *fakeServer {
 		io.WriteString(w, `{"success":true}`)
 	})
 	mux.HandleFunc("/user/captcha", func(w http.ResponseWriter, r *http.Request) {
-		io.WriteString(w, `{"token":"tok1","captcha":"data:image/png;base64,AAAA"}`)
+		f.mu.Lock()
+		img := f.captcha
+		f.mu.Unlock()
+		if img == "" {
+			img = "data:image/png;base64,AAAA"
+		}
+		json.NewEncoder(w).Encode(map[string]string{"token": "tok1", "captcha": img})
 	})
 	mux.HandleFunc("/inbox/comments", func(w http.ResponseWriter, r *http.Request) {
 		f.inbox.Add(1)
@@ -98,7 +112,22 @@ func newFakeServer(t *testing.T) *fakeServer {
 			denied(w)
 			return
 		}
+		f.mu.Lock()
+		if f.rotateTo != "" {
+			f.goodCookie = f.rotateTo
+			http.SetCookie(w, &http.Cookie{Name: "me", Value: f.rotateTo, Path: "/"})
+			f.rotateTo = ""
+		}
+		f.mu.Unlock()
 		io.WriteString(w, `{"messages":[]}`)
+	})
+	mux.HandleFunc("/items/get", func(w http.ResponseWriter, r *http.Request) {
+		f.items.Add(1)
+		if !authed(r) {
+			denied(w)
+			return
+		}
+		io.WriteString(w, `{"items":[]}`)
 	})
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -374,13 +403,21 @@ func TestLoginInteractive_SavesCookies(t *testing.T) {
 	store := NewStore(db.New(pool))
 	cfg := config.Config{Pr0User: "bot", Pr0Password: "s3cret"}
 
+	t.Setenv("TMPDIR", t.TempDir())
 	var out bytes.Buffer
 	err := loginInteractive(context.Background(), cfg, pr0gramm.New(nil, srv.URL), store, strings.NewReader("xK7p\n"), &out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "data:image/png;base64,AAAA") {
-		t.Errorf("output lacks captcha URL: %q", out.String())
+	if strings.Contains(out.String(), "base64") {
+		t.Errorf("output contains the data URI blob: %q", out.String())
+	}
+	path := captchaPath(t, out.String())
+	if !strings.HasSuffix(path, ".png") || !strings.Contains(path, "pr0sauce-captcha-") {
+		t.Errorf("captcha file path = %q", path)
+	}
+	if b, err := os.ReadFile(path); err != nil || !bytes.Equal(b, []byte{0, 0, 0}) {
+		t.Errorf("captcha file = %v, %v", b, err)
 	}
 	if !strings.HasSuffix(strings.TrimSpace(out.String()), "ok") {
 		t.Errorf("output does not end with ok: %q", out.String())
@@ -445,4 +482,122 @@ func TestHealth_Rules(t *testing.T) {
 			}
 		})
 	}
+}
+
+func captchaPath(t *testing.T, out string) string {
+	t.Helper()
+	m := regexp.MustCompile(`(?m)^Captcha image.*?: (\S+)$`).FindStringSubmatch(out)
+	if m == nil {
+		t.Fatalf("no captcha path in output: %q", out)
+	}
+	return m[1]
+}
+
+func TestLoginInteractive_PrintsPlainURLAsIs(t *testing.T) {
+	pool := testdb.New(t)
+	srv := newFakeServer(t)
+	srv.set(func() { srv.loginOK, srv.captcha = true, "https://example.invalid/captcha/1.png" })
+	var out bytes.Buffer
+	err := loginInteractive(context.Background(), config.Config{Pr0User: "bot", Pr0Password: "s3cret"},
+		pr0gramm.New(nil, srv.URL), NewStore(db.New(pool)), strings.NewReader("abc\n"), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "https://example.invalid/captcha/1.png") {
+		t.Errorf("output lacks the URL: %q", out.String())
+	}
+}
+
+func TestRun_CloudflareThenLoggedOutUsesOneLogin(t *testing.T) {
+	h := newHarness(t, func(r *runner) {
+		r.boMin, r.boMax, r.recheck = 20*time.Millisecond, 20*time.Millisecond, 20*time.Millisecond
+	})
+	// login "succeeds" but yields a cookie the API rejects, so every check says logged out
+	h.srv.set(func() { h.srv.cloudflare, h.srv.loginOK, h.srv.loginCookie = true, true, "bad" })
+	h.start(t)
+	h.waitHealth(t, http.StatusServiceUnavailable, "unknown")
+	if n := h.srv.logins.Load(); n != 0 {
+		t.Fatalf("logins = %d during Cloudflare block", n)
+	}
+
+	h.srv.set(func() { h.srv.cloudflare = false }) // identifier now answers JSON 403
+	h.waitHealth(t, http.StatusServiceUnavailable, "invalid")
+	if n := h.srv.logins.Load(); n != 1 {
+		t.Fatalf("logins = %d, want exactly 1", n)
+	}
+	before := h.srv.idents.Load()
+	waitFor(t, "further re-checks", func() bool { return h.srv.idents.Load() >= before+3 })
+	if n := h.srv.logins.Load(); n != 1 {
+		t.Errorf("logins = %d after further re-checks, want 1", n)
+	}
+}
+
+type countingStore struct {
+	Store
+	cookieSets atomic.Int32
+}
+
+func (s *countingStore) SetState(ctx context.Context, a db.SetStateParams) error {
+	if a.Key == sessionCookiesKey {
+		s.cookieSets.Add(1)
+	}
+	return s.Store.SetState(ctx, a)
+}
+
+func TestRun_PersistsRotatedCookies(t *testing.T) {
+	var cs *countingStore
+	h := newHarness(t, func(r *runner) {
+		cs = &countingStore{Store: r.store}
+		r.store = cs
+		r.persistEvery = 40 * time.Millisecond
+	})
+	if err := h.store.SetState(context.Background(), db.SetStateParams{Key: sessionCookiesKey, Value: cookiesJSON("good")}); err != nil {
+		t.Fatal(err)
+	}
+	h.start(t)
+	h.waitHealth(t, http.StatusOK, "ok")
+	time.Sleep(150 * time.Millisecond) // several intervals with unchanged cookies
+	if n := cs.cookieSets.Load(); n != 0 {
+		t.Fatalf("cookies rewritten %d times although unchanged", n)
+	}
+
+	h.srv.set(func() { h.srv.rotateTo = "rotated" })
+	waitFor(t, "rotated cookie persisted", func() bool {
+		v, err := h.store.GetState(context.Background(), sessionCookiesKey)
+		return err == nil && strings.Contains(v, "rotated")
+	})
+	n := cs.cookieSets.Load()
+	time.Sleep(150 * time.Millisecond)
+	if m := cs.cookieSets.Load(); m != n || n != 1 {
+		t.Errorf("cookie writes = %d then %d, want exactly 1", n, m)
+	}
+}
+
+func TestRun_OneSessionCheckPerTick(t *testing.T) {
+	h := newHarness(t, nil)
+	if err := h.store.SetState(context.Background(), db.SetStateParams{Key: sessionCookiesKey, Value: cookiesJSON("good")}); err != nil {
+		t.Fatal(err)
+	}
+	h.start(t)
+	h.waitHealth(t, http.StatusOK, "ok")
+
+	// Session dies behind a Cloudflare block, and a due request whose item
+	// lookup also fails with 403: two ErrAuth steps per tick.
+	h.srv.set(func() { h.srv.goodCookie, h.srv.cloudflare = "rotated", true })
+	if err := insertDue(h.store); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "items lookups", func() bool { return h.srv.items.Load() >= 5 })
+	idents, inbox := h.srv.idents.Load(), h.srv.inbox.Load()
+	if idents > inbox+1 { // +1: the startup check
+		t.Errorf("identifier calls = %d for %d ticks, want at most one per tick", idents, inbox)
+	}
+}
+
+func insertDue(s Store) error {
+	_, err := s.InsertRequestIgnore(context.Background(), db.InsertRequestIgnoreParams{
+		MessageID: 1, ItemID: 42, Requester: "someone", Thumb: "t", MentionedAt: time.Now(),
+		Status: statusPending, NextAttemptAt: time.Now().Add(-time.Hour),
+	})
+	return err
 }

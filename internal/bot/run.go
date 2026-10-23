@@ -3,12 +3,15 @@ package bot
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
+	"os"
 	"strings"
 	"time"
 
@@ -18,6 +21,13 @@ import (
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 )
+
+const defaultPersistEvery = 10 * time.Minute
+
+type checkResult struct {
+	valid bool
+	err   error
+}
 
 const (
 	sessionCookiesKey = "session_cookies"
@@ -55,6 +65,14 @@ type runner struct {
 	boMin   time.Duration
 	boMax   time.Duration
 
+	persistEvery time.Duration // min. interval between rotated-cookie persists
+
+	loginUsed      bool // the one automatic login has been spent
+	startupUnknown bool // startup never got a definitive session answer yet
+	lastCookies    string
+	lastPersist    time.Time
+	checked        *checkResult // SessionValid result of the current tick
+
 	nextCheck time.Time     // earliest next SessionValid while not ok
 	backoff   time.Duration // current backoff while unknown
 }
@@ -82,10 +100,11 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	clock := systemClock{}
 	r := &runner{
 		cfg: cfg, log: log, bot: b, store: store, sess: client, clock: clock,
-		health:  &health{pinger: pool, clock: clock},
-		poll:    cfg.PollInterval,
-		sync:    cfg.CommentSyncInterval,
-		recheck: defaultRecheck, boMin: defaultBackoffMin, boMax: defaultBackoffMax,
+		health:       &health{pinger: pool, clock: clock},
+		poll:         cfg.PollInterval,
+		sync:         cfg.CommentSyncInterval,
+		persistEvery: defaultPersistEvery,
+		recheck:      defaultRecheck, boMin: defaultBackoffMin, boMax: defaultBackoffMax,
 	}
 	return r.run(ctx)
 }
@@ -147,10 +166,12 @@ func (r *runner) startHealth() (*http.Server, error) {
 // place the bot ever logs in by itself, and at most once.
 func (r *runner) startup(ctx context.Context) {
 	r.importCookies(ctx)
+	r.lastPersist = r.clock.Now()
 	valid, err := r.sess.SessionValid(ctx)
 	switch {
 	case err != nil:
 		r.setUnknown(err)
+		r.startupUnknown = true
 	case valid:
 		r.setOK()
 	default:
@@ -159,7 +180,8 @@ func (r *runner) startup(ctx context.Context) {
 }
 
 func (r *runner) loginOnce(ctx context.Context) {
-	r.log.Info("persisted session invalid, logging in once")
+	r.loginUsed = true
+	r.log.Info("session invalid, logging in once")
 	if err := r.sess.Login(ctx, r.cfg.Pr0User, r.cfg.Pr0Password, "", ""); err != nil {
 		r.log.Error("automatic login failed", "err", err)
 		r.setInvalid()
@@ -168,7 +190,7 @@ func (r *runner) loginOnce(ctx context.Context) {
 	if err := r.persistCookies(ctx); err != nil {
 		r.log.Error("persisting session cookies failed", "err", err)
 	}
-	valid, err := r.sess.SessionValid(ctx)
+	valid, err := r.checkSession(ctx)
 	switch {
 	case err != nil:
 		r.setUnknown(err)
@@ -184,7 +206,43 @@ func (r *runner) persistCookies(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	return r.store.SetState(ctx, db.SetStateParams{Key: sessionCookiesKey, Value: string(data)})
+	if err := r.store.SetState(ctx, db.SetStateParams{Key: sessionCookiesKey, Value: string(data)}); err != nil {
+		return err
+	}
+	r.lastCookies, r.lastPersist = string(data), r.clock.Now()
+	return nil
+}
+
+// maybePersistCookies writes the client's cookies back when pr0gramm rotated
+// them, at most every persistEvery. A concurrent bot-login write could be
+// overwritten here, but only while the bot's own session is valid, which is
+// acceptable.
+func (r *runner) maybePersistCookies(ctx context.Context) {
+	if r.clock.Now().Sub(r.lastPersist) < r.persistEvery {
+		return
+	}
+	data, err := r.sess.ExportCookies()
+	if err != nil {
+		r.log.Warn("exporting session cookies", "err", err)
+		return
+	}
+	if string(data) == r.lastCookies {
+		r.lastPersist = r.clock.Now()
+		return
+	}
+	if err := r.persistCookies(ctx); err != nil {
+		r.log.Warn("persisting rotated session cookies", "err", err)
+	}
+}
+
+// checkSession runs SessionValid at most once per tick; later callers in the
+// same tick get the first result.
+func (r *runner) checkSession(ctx context.Context) (bool, error) {
+	if r.checked == nil {
+		v, err := r.sess.SessionValid(ctx)
+		r.checked = &checkResult{v, err}
+	}
+	return r.checked.valid, r.checked.err
 }
 
 // importCookies loads session_cookies from the DB into the client, if present.
@@ -199,17 +257,24 @@ func (r *runner) importCookies(ctx context.Context) {
 	}
 	if err := r.sess.ImportCookies([]byte(v)); err != nil {
 		r.log.Warn("importing session cookies", "err", err)
+		return
+	}
+	// Remember the normalised form so an unchanged jar is not rewritten.
+	if data, err := r.sess.ExportCookies(); err == nil {
+		r.lastCookies = string(data)
 	}
 }
 
 func (r *runner) setOK() {
 	r.health.setSession(sessionOK)
+	r.startupUnknown = false
 	r.backoff = 0
 	r.log.Info("pr0gramm session ok")
 }
 
 func (r *runner) setInvalid() {
 	r.health.setSession(sessionInvalid)
+	r.startupUnknown = false
 	r.nextCheck = r.clock.Now().Add(r.recheck)
 	r.log.Error(loginHint)
 }
@@ -227,6 +292,7 @@ func (r *runner) setUnknown(cause error) {
 
 // tick runs one poll round, or a session re-check when the session is not ok.
 func (r *runner) tick(ctx context.Context) {
+	r.checked = nil
 	if r.health.getSession() != sessionOK {
 		r.recheckSession(ctx)
 		if r.health.getSession() != sessionOK {
@@ -247,11 +313,17 @@ func (r *runner) tick(ctx context.Context) {
 		}
 	}
 	if err := r.bot.MarkHandledRead(ctx); err != nil {
-		r.stepFailed(ctx, "mark read", err)
+		if r.stepFailed(ctx, "mark read", err) {
+			return
+		}
+	}
+	if r.health.getSession() == sessionOK {
+		r.maybePersistCookies(ctx)
 	}
 }
 
 func (r *runner) syncTick(ctx context.Context) {
+	r.checked = nil
 	if r.health.getSession() != sessionOK {
 		return
 	}
@@ -271,13 +343,16 @@ func (r *runner) stepFailed(ctx context.Context, step string, err error) (stop b
 		return false
 	}
 	r.log.Warn("pr0gramm auth error, checking session", "step", step, "err", err)
-	valid, cerr := r.sess.SessionValid(ctx)
+	first := r.checked == nil
+	valid, cerr := r.checkSession(ctx)
 	switch {
 	case cerr != nil:
 		r.log.Warn("session check failed, continuing", "err", cerr)
 		return false
 	case valid:
 		return false
+	case !first: // already flipped to invalid earlier in this tick
+		return true
 	default:
 		r.setInvalid()
 		return true
@@ -292,7 +367,7 @@ func (r *runner) recheckSession(ctx context.Context) {
 		return
 	}
 	r.importCookies(ctx)
-	valid, err := r.sess.SessionValid(ctx)
+	valid, err := r.checkSession(ctx)
 	prev := r.health.getSession()
 	switch {
 	case err != nil && prev == sessionUnknown:
@@ -302,6 +377,11 @@ func (r *runner) recheckSession(ctx context.Context) {
 		r.log.Warn("session re-check failed, still invalid", "err", err)
 	case valid:
 		r.setOK()
+	case r.startupUnknown && !r.loginUsed:
+		// Startup never got a definitive answer; this is it, so the one
+		// automatic login is still available. A session that was ok and died
+		// mid-loop never gets here.
+		r.loginOnce(ctx)
 	default:
 		r.setInvalid()
 	}
@@ -323,7 +403,16 @@ func loginInteractive(ctx context.Context, cfg config.Config, sess session, stor
 	if err != nil {
 		return fmt.Errorf("bot: captcha: %w", err)
 	}
-	fmt.Fprintf(out, "Captcha image: %s\nCaptcha text: ", c.ImageURL)
+	img := c.ImageURL
+	if strings.HasPrefix(img, "data:") {
+		path, err := saveDataURI(img)
+		if err != nil {
+			return fmt.Errorf("bot: save captcha image: %w", err)
+		}
+		fmt.Fprintf(out, "Captcha image saved to: %s\nCaptcha text: ", path)
+	} else {
+		fmt.Fprintf(out, "Captcha image: %s\nCaptcha text: ", img)
+	}
 	line, err := bufio.NewReader(in).ReadString('\n')
 	if err != nil && (!errors.Is(err, io.EOF) || strings.TrimSpace(line) == "") {
 		return fmt.Errorf("bot: read captcha: %w", err)
@@ -340,4 +429,46 @@ func loginInteractive(ctx context.Context, cfg config.Config, sess session, stor
 	}
 	fmt.Fprintln(out, "ok")
 	return nil
+}
+
+// saveDataURI decodes a data: URI into a temp file and returns its path.
+func saveDataURI(uri string) (string, error) {
+	meta, payload, ok := strings.Cut(strings.TrimPrefix(uri, "data:"), ",")
+	if !ok {
+		return "", errors.New("malformed data URI")
+	}
+	mimeType, _, _ := strings.Cut(meta, ";")
+	var data []byte
+	if strings.HasSuffix(meta, ";base64") {
+		var err error
+		if data, err = base64.StdEncoding.DecodeString(payload); err != nil {
+			return "", err
+		}
+	} else {
+		p, err := url.PathUnescape(payload)
+		if err != nil {
+			return "", err
+		}
+		data = []byte(p)
+	}
+	ext := ".img"
+	switch mimeType {
+	case "image/png":
+		ext = ".png"
+	case "image/jpeg":
+		ext = ".jpg"
+	case "image/gif":
+		ext = ".gif"
+	case "image/svg+xml":
+		ext = ".svg"
+	}
+	f, err := os.CreateTemp("", "pr0sauce-captcha-*"+ext)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.Write(data); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
 }
