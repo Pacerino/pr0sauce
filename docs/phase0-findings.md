@@ -82,3 +82,14 @@ All commands ran on the host with the bot credentials sourced from `/opt/pr0sauc
 - **(c) `kind` values. [FACT]** All 100 messages in `/inbox/comments` have `kind: "mention"`, and `type` is `comment`. Message keys are blocked, canReply, collection, created, flags, id, image, itemId, keyword, kind, mark, message, name, owner, ownerMark, preview, read, score, senderId, tag, thumb, type. **`image` is null in inbox messages**, so it can't be used for the video URL.
 - **(d) Confirmed on the test post. [FACT]** `GET /api/items/get?id=7181444&flags=31` (logged in) returns 186 items. The entry with `id == 7181444` has `image = 2026/10/23/4891a7e031bc5868-h264-full_hd.mp4`. `https://vid.pr0gramm.com/<image>` returns 200, and the thumb-stem URL returns 404.
 - **(e) Root cause confirmed. [FACT]** After restarting, the old bot picked up the test mention and logged `level=error msg="could not fetch song metdata" error="invalid status \"404 Not Found\": https://vid.pr0gramm.com/2026/10/23/4891a7e031bc5868.mp4"`. It sent no reply. **Every mention on a post using the new suffixed video names fails silently.** People are still tagging @Sauce: 100 mentions are in the inbox, several from today.
+
+## Task 4 dry run (local)
+
+`import-legacy` from a restored `pg_dump -Fc` of the legacy database (postgres:13) into a fresh, migrated postgres:18. The import ran in one transaction in about 11 s.
+
+- Songs: 57503
+- Hits (non-NULL title): 46704
+- DuplicatesDropped: 55
+- Comments: 55228
+
+These match the expected values. A second run without `--force` refused with "songs is not empty". The legacy `comments.created` column is `timestamptz` (not an epoch), so it maps straight to `bot_comments.created_at`.
