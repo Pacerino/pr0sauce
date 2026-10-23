@@ -19,7 +19,7 @@ const (
 	botCommentTag = "Es wurden" // legacy filter: only the bot's answers carry it
 )
 
-type syncStats struct{ fetched, upserted, pages int }
+type syncStats struct{ fetched, upserted, skipped, pages int }
 
 // SyncComments mirrors the bot's own pr0gramm comments (and their votes) into
 // bot_comments incrementally: from just before the newest stored comment, then
@@ -31,21 +31,23 @@ func (b *Bot) SyncComments(ctx context.Context) error {
 		return fmt.Errorf("bot: latest bot comment: %w", err)
 	}
 	refreshFrom := now.Add(-syncWindow)
-	var start time.Time
-	if latest != nil {
-		start = latest.Add(-syncOverlap)
-	} else {
-		base := now
-		if v, err := b.store.GetState(ctx, liveSinceKey); err == nil {
-			ls, perr := time.Parse(time.RFC3339Nano, v)
-			if perr != nil {
-				return fmt.Errorf("bot: parse live_since %q: %w", v, perr)
-			}
-			base = ls
-		} else if !errors.Is(err, ErrNotFound) {
-			return fmt.Errorf("bot: get live_since: %w", err)
+	var floor time.Time
+	if v, err := b.store.GetState(ctx, liveSinceKey); err == nil {
+		ls, perr := time.Parse(time.RFC3339Nano, v)
+		if perr != nil {
+			return fmt.Errorf("bot: parse live_since %q: %w", v, perr)
 		}
-		start = base.Add(-syncWindow)
+		floor = ls.Add(-syncWindow)
+	} else if errors.Is(err, ErrNotFound) {
+		floor = now.Add(-syncWindow)
+	} else {
+		return fmt.Errorf("bot: get live_since: %w", err)
+	}
+	// Clamp: at cutover the newest legacy comment can be months old, but the
+	// bot posted nothing between then and live_since.
+	start := floor
+	if latest != nil && latest.Add(-syncOverlap).After(floor) {
+		start = latest.Add(-syncOverlap)
 	}
 
 	var st syncStats
@@ -59,15 +61,18 @@ func (b *Bot) SyncComments(ctx context.Context) error {
 			return err
 		}
 	}
-	b.log.Info("comment sync", "fetched", st.fetched, "upserted", st.upserted, "pages", st.pages,
+	b.log.Info("comment sync", "fetched", st.fetched, "upserted", st.upserted, "skipped", st.skipped, "pages", st.pages,
 		"from", start, "refreshed", refreshed)
 	return nil
 }
 
 // syncFrom pages UserComments from after while HasNewer, upserting bot answers.
 func (b *Bot) syncFrom(ctx context.Context, after time.Time, st *syncStats) error {
-	for page := 0; ; page++ {
-		if page >= syncMaxPages {
+	// Paging assumes `after` is exclusive. Comments sharing a second across a
+	// page boundary could be missed here; the 1h overlap of the next sync's
+	// start and the 7-day refresh pass cover them.
+	for {
+		if st.pages >= syncMaxPages { // cap is per sync, shared by both passes
 			b.log.Warn("comment sync page cap hit, rest is picked up next sync", "cap", syncMaxPages, "after", after)
 			return nil
 		}
@@ -83,6 +88,11 @@ func (b *Bot) syncFrom(ctx context.Context, after time.Time, st *syncStats) erro
 				newest = c.Created
 			}
 			if !strings.Contains(c.Content, botCommentTag) {
+				continue
+			}
+			if c.Up < math.MinInt32 || c.Up > math.MaxInt32 || c.Down < math.MinInt32 || c.Down > math.MaxInt32 {
+				b.log.Warn("comment votes out of int32 range, skipping", "comment", c.ID, "up", c.Up, "down", c.Down)
+				st.skipped++
 				continue
 			}
 			if err := b.upsertComment(ctx, c); err != nil {
@@ -102,12 +112,6 @@ func (b *Bot) syncFrom(ctx context.Context, after time.Time, st *syncStats) erro
 }
 
 func (b *Bot) upsertComment(ctx context.Context, c pr0gramm.UserComment) error {
-	if c.Up < math.MinInt32 || c.Up > math.MaxInt32 {
-		return fmt.Errorf("bot: comment %d: up=%d out of int32 range", c.ID, c.Up)
-	}
-	if c.Down < math.MinInt32 || c.Down > math.MaxInt32 {
-		return fmt.Errorf("bot: comment %d: down=%d out of int32 range", c.ID, c.Down)
-	}
 	if err := b.store.UpsertBotComment(ctx, db.UpsertBotCommentParams{
 		CommentID: c.ID, ItemID: c.ItemID, Content: c.Content, Up: int32(c.Up), Down: int32(c.Down),
 		Thumb: nilIfEmpty(c.Thumb), CreatedAt: c.Created,

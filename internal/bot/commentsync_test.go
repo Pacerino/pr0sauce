@@ -168,18 +168,19 @@ func TestSyncComments_NoInfiniteLoop(t *testing.T) {
 
 func TestSyncComments_PageCap(t *testing.T) {
 	e := setup(t, func(c *config.Config) { c.Pr0User = "sauce" })
-	e.goLive(t) // start before now-7d: no refresh
+	e.goLive(t)
+	e.seedComment(t, 99, 1, testNow.Add(-24*time.Hour)) // start > now-7d: refresh would run too
 	n := 0
-	e.pr0.userComments = func(time.Time) (pr0gramm.UserComments, error) {
+	e.pr0.userComments = func(after time.Time) (pr0gramm.UserComments, error) {
 		n++ // always advances, always HasNewer
 		return pr0gramm.UserComments{HasNewer: true, Comments: []pr0gramm.UserComment{
-			botComment(int64(n), 1, 0, kumiteComment, testNow.Add(-time.Hour-7*24*time.Hour).Add(time.Duration(n)*time.Second))}}, nil
+			botComment(int64(n), 1, 0, kumiteComment, after.Add(time.Second))}}, nil
 	}
 	if err := e.bot.SyncComments(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(e.pr0.afters) != 50 {
-		t.Fatalf("fetches = %d, want cap 50", len(e.pr0.afters))
+		t.Fatalf("fetches = %d, want per-sync cap 50 across both passes", len(e.pr0.afters))
 	}
 }
 
@@ -187,10 +188,35 @@ func TestSyncComments_VoteOutOfRange(t *testing.T) {
 	e := setup(t, func(c *config.Config) { c.Pr0User = "sauce" })
 	e.goLive(t)
 	e.pr0.userComments = func(time.Time) (pr0gramm.UserComments, error) {
-		return pr0gramm.UserComments{Comments: []pr0gramm.UserComment{botComment(1, 1<<40, 0, kumiteComment, testNow)}}, nil
+		return pr0gramm.UserComments{Comments: []pr0gramm.UserComment{
+			botComment(1, 3, 0, kumiteComment, testNow.Add(-3*time.Minute)),
+			botComment(2, 1<<40, 0, kumiteComment, testNow.Add(-2*time.Minute)),
+			botComment(3, 0, -(1 << 40), kumiteComment, testNow.Add(-time.Minute)),
+			botComment(4, 4, 0, kumiteComment, testNow),
+		}}, nil
 	}
-	if err := e.bot.SyncComments(context.Background()); err == nil {
-		t.Fatal("want range error")
+	if err := e.bot.SyncComments(context.Background()); err != nil {
+		t.Fatalf("SyncComments = %v, want nil", err)
+	}
+	for id, want := range map[int64]bool{1: true, 2: false, 3: false, 4: true} {
+		if _, _, ok := e.commentVotes(t, id); ok != want {
+			t.Errorf("comment %d stored = %v, want %v", id, ok, want)
+		}
+	}
+}
+
+func TestSyncComments_ClampsOldLatestToLiveSinceFloor(t *testing.T) {
+	e := setup(t, func(c *config.Config) { c.Pr0User = "sauce" })
+	if err := e.q.SetState(context.Background(), db.SetStateParams{Key: "live_since", Value: testNow.Format(time.RFC3339Nano)}); err != nil {
+		t.Fatal(err)
+	}
+	e.seedComment(t, 1, 1, testNow.AddDate(0, -6, 0))
+	if err := e.bot.SyncComments(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	want := testNow.Add(-7 * 24 * time.Hour)
+	if len(e.pr0.afters) == 0 || !e.pr0.afters[0].Equal(want) {
+		t.Fatalf("afters = %v, want first %v", e.pr0.afters, want)
 	}
 }
 
