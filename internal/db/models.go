@@ -42,6 +42,13 @@ type Request struct {
 	UpdatedAt        time.Time
 }
 
+type Session struct {
+	TokenHash []byte
+	UserID    int64
+	CreatedAt time.Time
+	ExpiresAt time.Time
+}
+
 type Song struct {
 	ItemID        int64
 	Title         *string
@@ -57,4 +64,48 @@ type Song struct {
 	AppleMusicUrl *string
 	Isrc          *string
 	DeezerUrl     *string
+	CorrectedAt   *time.Time
+}
+
+type SongHistory struct {
+	ID           int64
+	ItemID       int64
+	Snapshot     []byte
+	Source       string
+	ActorID      *int64
+	SuggestionID *int64
+	CreatedAt    time.Time
+}
+
+type Suggestion struct {
+	ID         int64
+	ItemID     int64
+	UserID     int64
+	Title      string
+	Artist     string
+	Album      *string
+	ProofUrl   *string
+	Status     string
+	ReviewerID *int64
+	Reason     *string
+	CreatedAt  time.Time
+	DecidedAt  *time.Time
+}
+
+type User struct {
+	ID          int64
+	Pr0UserID   int64
+	Name        string
+	Role        string
+	BannedAt    *time.Time
+	BanReason   *string
+	CreatedAt   time.Time
+	LastLoginAt time.Time
+}
+
+type Vote struct {
+	SuggestionID int64
+	UserID       int64
+	Value        int16
+	CreatedAt    time.Time
 }

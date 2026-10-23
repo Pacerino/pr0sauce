@@ -10,8 +10,42 @@ import (
 	"time"
 )
 
+const applyCorrection = `-- name: ApplyCorrection :exec
+update songs set
+  apple_music_url = null, isrc = null, spotify_url = null,
+  spotify_id = null, youtube_url = null, youtube_id = null,
+  title = $2, artist = $3, album = $4, provider = $5, deezer_url = $6, cover_url = $7,
+  corrected_at = now()
+where item_id = $1
+`
+
+type ApplyCorrectionParams struct {
+	ItemID    int64
+	Title     *string
+	Artist    *string
+	Album     *string
+	Provider  string
+	DeezerUrl *string
+	CoverUrl  *string
+}
+
+// Clears every field the bot's match produced (deezer_url and cover_url are
+// cleared by being overwritten from the params), then writes the corrected ones.
+func (q *Queries) ApplyCorrection(ctx context.Context, arg ApplyCorrectionParams) error {
+	_, err := q.db.Exec(ctx, applyCorrection,
+		arg.ItemID,
+		arg.Title,
+		arg.Artist,
+		arg.Album,
+		arg.Provider,
+		arg.DeezerUrl,
+		arg.CoverUrl,
+	)
+	return err
+}
+
 const getSong = `-- name: GetSong :one
-select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url from songs where item_id = $1
+select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url, corrected_at from songs where item_id = $1
 `
 
 func (q *Queries) GetSong(ctx context.Context, itemID int64) (Song, error) {
@@ -32,12 +66,13 @@ func (q *Queries) GetSong(ctx context.Context, itemID int64) (Song, error) {
 		&i.AppleMusicUrl,
 		&i.Isrc,
 		&i.DeezerUrl,
+		&i.CorrectedAt,
 	)
 	return i, err
 }
 
 const listRecentSongs = `-- name: ListRecentSongs :many
-select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url from songs
+select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url, corrected_at from songs
 where title is not null
   and (recognized_at, item_id) < ($1::timestamptz, $2::bigint)
 order by recognized_at desc, item_id desc
@@ -75,6 +110,7 @@ func (q *Queries) ListRecentSongs(ctx context.Context, arg ListRecentSongsParams
 			&i.AppleMusicUrl,
 			&i.Isrc,
 			&i.DeezerUrl,
+			&i.CorrectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -86,8 +122,42 @@ func (q *Queries) ListRecentSongs(ctx context.Context, arg ListRecentSongsParams
 	return items, nil
 }
 
+const lockSong = `-- name: LockSong :one
+select item_id from songs where item_id = $1 for update
+`
+
+func (q *Queries) LockSong(ctx context.Context, itemID int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockSong, itemID)
+	var item_id int64
+	err := row.Scan(&item_id)
+	return item_id, err
+}
+
+const restoreSnapshot = `-- name: RestoreSnapshot :exec
+update songs s set
+  title = r.title, artist = r.artist, album = r.album, provider = r.provider,
+  spotify_url = r.spotify_url, spotify_id = r.spotify_id,
+  youtube_url = r.youtube_url, youtube_id = r.youtube_id,
+  cover_url = r.cover_url, recognized_at = r.recognized_at,
+  apple_music_url = r.apple_music_url, isrc = r.isrc, deezer_url = r.deezer_url,
+  corrected_at = r.corrected_at
+from jsonb_populate_record(null::songs, $2::jsonb) r
+where s.item_id = $1
+`
+
+type RestoreSnapshotParams struct {
+	ItemID   int64
+	Snapshot []byte
+}
+
+// Writes every column back from a SongSnapshot jsonb, corrected_at included.
+func (q *Queries) RestoreSnapshot(ctx context.Context, arg RestoreSnapshotParams) error {
+	_, err := q.db.Exec(ctx, restoreSnapshot, arg.ItemID, arg.Snapshot)
+	return err
+}
+
 const searchSongs = `-- name: SearchSongs :many
-select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url from songs
+select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url, corrected_at from songs
 where title is not null
   and (title ilike $1::text escape '\' or artist ilike $1::text escape '\')
 order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), $2::text) desc, recognized_at desc, item_id desc
@@ -131,6 +201,7 @@ func (q *Queries) SearchSongs(ctx context.Context, arg SearchSongsParams) ([]Son
 			&i.AppleMusicUrl,
 			&i.Isrc,
 			&i.DeezerUrl,
+			&i.CorrectedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -142,6 +213,17 @@ func (q *Queries) SearchSongs(ctx context.Context, arg SearchSongsParams) ([]Son
 	return items, nil
 }
 
+const songSnapshot = `-- name: SongSnapshot :one
+select to_jsonb(s) as snapshot from songs s where s.item_id = $1
+`
+
+func (q *Queries) SongSnapshot(ctx context.Context, itemID int64) ([]byte, error) {
+	row := q.db.QueryRow(ctx, songSnapshot, itemID)
+	var snapshot []byte
+	err := row.Scan(&snapshot)
+	return snapshot, err
+}
+
 const upsertSong = `-- name: UpsertSong :exec
 insert into songs (item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url)
 values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
@@ -151,6 +233,7 @@ on conflict (item_id) do update set
   youtube_url = excluded.youtube_url, youtube_id = excluded.youtube_id,
   cover_url = excluded.cover_url, recognized_at = excluded.recognized_at,
   apple_music_url = excluded.apple_music_url, isrc = excluded.isrc, deezer_url = excluded.deezer_url
+where songs.corrected_at is null
 `
 
 type UpsertSongParams struct {

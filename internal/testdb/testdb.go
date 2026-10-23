@@ -40,7 +40,7 @@ func New(t *testing.T) *pgxpool.Pool {
 	if initErr != nil {
 		t.Fatalf("testdb: %v", initErr)
 	}
-	if _, err := pool.Exec(ctx, `truncate songs, requests, bot_comments, bot_state restart identity cascade`); err != nil {
+	if _, err := pool.Exec(ctx, `truncate songs, requests, bot_comments, bot_state, users, sessions, suggestions, votes, song_history restart identity cascade`); err != nil {
 		t.Fatalf("testdb: truncate: %v", err)
 	}
 	return pool
