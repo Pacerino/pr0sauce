@@ -61,3 +61,14 @@ export function formatNumberDe(n: number): string {
 export function formatPercentDe(fraction: number): string {
   return `${Math.round(fraction * 100)} %`;
 }
+
+/** Returns the URL only if it is an absolute http(s) URL; guards href/src against javascript: etc. */
+export function safeHttpUrl(u: string | null): string | null {
+  if (!u) return null;
+  try {
+    const { protocol } = new URL(u);
+    return protocol === "http:" || protocol === "https:" ? u : null;
+  } catch {
+    return null;
+  }
+}

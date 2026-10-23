@@ -23,17 +23,22 @@ export default async function Home({ searchParams }: { searchParams: Promise<SP>
   if (id !== null) redirect(`/${id}`);
 
   let list: SongList | null = null;
-  let stats: Stats | null = null;
   let invalid = false;
   try {
-    [list, stats] = await Promise.all([
-      api.songs({ q: q || undefined, cursor: cursor || undefined }),
-      // KPIs are only shown on the first page of the unfiltered view.
-      !q && !cursor ? api.stats() : Promise.resolve(null),
-    ]);
+    list = await api.songs({ q: q || undefined, cursor: cursor || undefined });
   } catch (e) {
     if (e instanceof ApiError && e.status === 400) invalid = true;
     else throw e;
+  }
+
+  // KPIs are only shown on the first page of the unfiltered view; a stats failure must not break the list.
+  let stats: Stats | null = null;
+  if (!q && !cursor) {
+    try {
+      stats = await api.stats();
+    } catch (e) {
+      console.error("stats unavailable", e);
+    }
   }
 
   const now = new Date();

@@ -1,14 +1,16 @@
+import { safeHttpUrl } from "@/lib/format";
 import type { Song } from "@/lib/types";
 
 /** Cover image if known, otherwise the accent gradient placeholder. */
-export function Cover({ song, size, className = "" }: { song: Song; size: number; className?: string }) {
+export function Cover({ song, size, alt = "", className = "" }: { song: Song; size: number; alt?: string; className?: string }) {
   const style = { width: size, height: size };
-  if (song.coverUrl) {
+  const cover = safeHttpUrl(song.coverUrl);
+  if (cover) {
     return (
       // eslint-disable-next-line @next/next/no-img-element -- external hosts, deliberately not next/image
       <img
-        src={song.coverUrl}
-        alt=""
+        src={cover}
+        alt={alt}
         width={size}
         height={size}
         loading="lazy"

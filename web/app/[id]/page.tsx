@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 import { Cover } from "@/components/Cover";
 import { api } from "@/lib/api";
-import { formatDateDe, providerLabel } from "@/lib/format";
+import { formatDateDe, providerLabel, safeHttpUrl } from "@/lib/format";
 import { parseItemId } from "@/lib/ids";
 
 export const dynamic = "force-dynamic";
@@ -26,10 +26,13 @@ export default async function SongPage({ params }: Props) {
   const song = await getSong(id);
   if (!song) notFound();
 
+  const spotify = safeHttpUrl(song.spotifyUrl);
+  const youtube = safeHttpUrl(song.youtubeUrl);
+
   return (
     <article>
       <div className="flex flex-wrap gap-3.5">
-        <Cover song={song} size={110} />
+        <Cover song={song} size={110} alt={`Cover: ${song.title}`} />
         <div className="min-w-0 flex-1 basis-60">
           <h1 className="text-lg font-semibold break-words">{song.title}</h1>
           <div className="break-words text-[#aaa]">
@@ -45,9 +48,9 @@ export default async function SongPage({ params }: Props) {
             </span>
           </div>
           <div className="flex gap-1.5">
-            {song.spotifyUrl && (
+            {spotify && (
               <a
-                href={song.spotifyUrl}
+                href={spotify}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded bg-[#1db954] px-2.5 py-1.5 text-xs text-white"
@@ -55,9 +58,9 @@ export default async function SongPage({ params }: Props) {
                 Spotify
               </a>
             )}
-            {song.youtubeUrl && (
+            {youtube && (
               <a
-                href={song.youtubeUrl}
+                href={youtube}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="rounded bg-[#e62117] px-2.5 py-1.5 text-xs text-white"

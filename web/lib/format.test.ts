@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatNumberDe, formatPercentDe, providerLabel, relativeTimeDe } from "./format";
+import { formatNumberDe, formatPercentDe, providerLabel, relativeTimeDe, safeHttpUrl } from "./format";
 
 const now = new Date("2026-10-23T13:15:00Z");
 
@@ -47,4 +47,21 @@ describe("providerLabel", () => {
 describe("number formatting", () => {
   it("German thousands separator", () => expect(formatNumberDe(57503)).toBe("57.503"));
   it("whole percent", () => expect(formatPercentDe(0.7149)).toBe("71 %"));
+});
+
+describe("safeHttpUrl", () => {
+  it.each([
+    ["javascript:alert(1)"],
+    [" JAVASCRIPT:alert(1)"],
+    ["data:text/html,x"],
+    ["vbscript:x"],
+    ["/foo"],
+    ["garbage"],
+    [""],
+    [null],
+  ])("rejects %s", (u) => expect(safeHttpUrl(u)).toBeNull());
+  it("passes https and http", () => {
+    expect(safeHttpUrl("https://open.spotify.com/track/x")).toBe("https://open.spotify.com/track/x");
+    expect(safeHttpUrl("http://example.com/a.jpg")).toBe("http://example.com/a.jpg");
+  });
 });
