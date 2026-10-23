@@ -23,6 +23,8 @@ type Config struct {
 	BotHealthAddr       string
 	APIAddr             string
 	PublicBaseURL       string
+	// Pr0BaseURL overrides the pr0gramm API root; empty means production.
+	Pr0BaseURL string
 }
 
 // Load reads configuration via getenv (never os.Getenv directly).
@@ -36,6 +38,7 @@ func Load(getenv func(string) string) (Config, error) {
 		BotHealthAddr:     def(getenv("BOT_HEALTH_ADDR"), ":8081"),
 		APIAddr:           def(getenv("API_ADDR"), ":8080"),
 		PublicBaseURL:     def(getenv("PUBLIC_BASE_URL"), "https://pr0sauce.info"),
+		Pr0BaseURL:        getenv("PR0_BASE_URL"),
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("config: DATABASE_URL is required")

@@ -86,7 +86,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	}
 	defer pool.Close()
 
-	client := pr0gramm.New(nil, "")
+	client := pr0gramm.New(nil, cfg.Pr0BaseURL)
 	store := NewStore(db.New(pool))
 	b, err := New(Deps{
 		Store:      store,
@@ -396,7 +396,7 @@ func LoginInteractive(ctx context.Context, cfg config.Config, in io.Reader, out 
 		return err
 	}
 	defer pool.Close()
-	return loginInteractive(ctx, cfg, pr0gramm.New(nil, ""), NewStore(db.New(pool)), in, out)
+	return loginInteractive(ctx, cfg, pr0gramm.New(nil, cfg.Pr0BaseURL), NewStore(db.New(pool)), in, out)
 }
 
 func loginInteractive(ctx context.Context, cfg config.Config, sess session, store Store, in io.Reader, out io.Writer) error {

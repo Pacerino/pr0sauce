@@ -1,0 +1,107 @@
+name: pr0sauce2
+
+x-go: &go
+  image: ghcr.io/pacerino/pr0sauce-go:${TAG:?set TAG in deploy/.env}
+  env_file: .env
+  networks: [internal]
+
+services:
+  postgres:
+    image: postgres:18.6
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    networks: [internal]
+    volumes:
+      - pgdata:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  migrate:
+    <<: *go
+    command: ["migrate"]
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  shazam:
+    image: ghcr.io/pacerino/pr0sauce-shazam:${TAG:?set TAG in deploy/.env}
+    restart: unless-stopped
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=3).status == 200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  bot:
+    <<: *go
+    command: ["bot"]
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      shazam:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/pr0sauce", "healthcheck", "http://127.0.0.1:8081/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  api:
+    <<: *go
+    command: ["api"]
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/pr0sauce", "healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  web:
+    image: ghcr.io/pacerino/pr0sauce-web:${TAG:?set TAG in deploy/.env}
+    restart: unless-stopped
+    environment:
+      API_URL: http://api:8080
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - internal
+      - cloudflaretunnel
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/robots.txt').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: cloudflaretunnel
+      traefik.http.routers.pr0sauce-web.rule: Host(`pr0sauce.info`)
+      traefik.http.routers.pr0sauce-web.entrypoints: websecure
+      traefik.http.routers.pr0sauce-web.tls: "true"
+      traefik.http.routers.pr0sauce-web.service: pr0sauce-web
+      traefik.http.services.pr0sauce-web.loadbalancer.server.port: "3000"
+
+networks:
+  internal:
+  cloudflaretunnel:
+    external: true
+
+volumes:
+  pgdata:

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -19,7 +20,7 @@ import (
 	"github.com/Pacerino/pr0sauce/internal/legacy"
 )
 
-const usage = "usage: pr0sauce <migrate|import-legacy|bot|bot-login|api>\n"
+const usage = "usage: pr0sauce <migrate|import-legacy|bot|bot-login|api|healthcheck>\n"
 
 var commands = map[string]func(context.Context, []string) error{
 	"migrate":       runMigrate,
@@ -27,6 +28,7 @@ var commands = map[string]func(context.Context, []string) error{
 	"bot":           runBot,
 	"bot-login":     runBotLogin,
 	"api":           runAPI,
+	"healthcheck":   runHealthcheck,
 }
 
 func main() {
@@ -155,5 +157,28 @@ func runAPI(ctx context.Context, _ []string) error {
 		return err
 	}
 	log.Info("api stopped")
+	return nil
+}
+
+// runHealthcheck GETs args[0] with a 3 s timeout and succeeds on any 2xx. It
+// exists because the distroless image has no curl for container healthchecks.
+func runHealthcheck(ctx context.Context, args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: pr0sauce healthcheck <url>")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, args[0], nil)
+	if err != nil {
+		return err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("unhealthy: %s", resp.Status)
+	}
 	return nil
 }

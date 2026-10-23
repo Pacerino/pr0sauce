@@ -134,3 +134,22 @@ func TestLoad_RejectsNonPositive(t *testing.T) {
 		}
 	}
 }
+
+func TestLoad_Pr0BaseURL(t *testing.T) {
+	base := map[string]string{"DATABASE_URL": "postgres://x"}
+	cfg, err := Load(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Pr0BaseURL != "" {
+		t.Errorf("default Pr0BaseURL = %q, want empty", cfg.Pr0BaseURL)
+	}
+	base["PR0_BASE_URL"] = "http://127.0.0.1:9"
+	cfg, err = Load(env(base))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Pr0BaseURL != "http://127.0.0.1:9" {
+		t.Errorf("Pr0BaseURL = %q", cfg.Pr0BaseURL)
+	}
+}
