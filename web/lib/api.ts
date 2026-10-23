@@ -11,12 +11,12 @@ export class ApiError extends Error {
   }
 }
 
-function baseUrl(): string {
+export function apiBaseUrl(): string {
   return (process.env.API_URL || "http://api:8080").replace(/\/+$/, "");
 }
 
 async function request(path: string, init: RequestInit & { next?: { revalidate: number } }) {
-  const res = await fetch(baseUrl() + path, init);
+  const res = await fetch(apiBaseUrl() + path, init);
   if (res.ok) return res;
   let message = res.statusText || `HTTP ${res.status}`;
   try {

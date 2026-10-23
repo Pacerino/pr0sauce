@@ -52,6 +52,11 @@ export default async function Home({ searchParams }: { searchParams: Promise<SP>
         <h1 className="text-2xl font-bold">Welches Lied läuft da?</h1>
         <p className="text-[#888]">Alle Songs, die @Sauce auf pr0gramm erkannt hat</p>
       </section>
+      {first(sp.login) === "fehler" && (
+        <p role="alert" className="rounded bg-surface p-3">
+          Die Anmeldung mit pr0gramm hat nicht geklappt. Bitte versuche es noch einmal.
+        </p>
+      )}
       <SearchBox defaultValue={q} />
       {stats && <Kpis stats={stats} />}
 
