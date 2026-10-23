@@ -80,3 +80,40 @@ func (c *Client) TrackURL(ctx context.Context, isrc string) (string, error) {
 func (c *Client) DeezerURL(ctx context.Context, isrc string) (string, error) {
 	return c.TrackURL(ctx, isrc)
 }
+
+// SearchTrack finds the best Deezer match for artist and title and returns
+// its link and large cover URL, or ErrNotFound.
+func (c *Client) SearchTrack(ctx context.Context, artist, title string) (link, cover string, err error) {
+	q := url.Values{"q": {fmt.Sprintf("artist:%q track:%q", artist, title)}, "limit": {"1"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/search?"+q.Encode(), nil)
+	if err != nil {
+		return "", "", err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return "", "", fmt.Errorf("deezer: request: %w", err)
+	}
+	defer resp.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	if err != nil {
+		return "", "", fmt.Errorf("deezer: read body: %w", err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return "", "", fmt.Errorf("deezer: status %d", resp.StatusCode)
+	}
+	var r struct {
+		Data []struct {
+			Link  string `json:"link"`
+			Album struct {
+				CoverBig string `json:"cover_big"`
+			} `json:"album"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(data, &r); err != nil {
+		return "", "", fmt.Errorf("deezer: decode: %w", err)
+	}
+	if len(r.Data) == 0 || !strings.HasPrefix(r.Data[0].Link, linkPrefix) {
+		return "", "", ErrNotFound
+	}
+	return r.Data[0].Link, r.Data[0].Album.CoverBig, nil
+}

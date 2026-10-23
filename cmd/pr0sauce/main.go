@@ -17,6 +17,7 @@ import (
 	"github.com/Pacerino/pr0sauce/internal/bot"
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
+	"github.com/Pacerino/pr0sauce/internal/deezer"
 	"github.com/Pacerino/pr0sauce/internal/legacy"
 )
 
@@ -136,15 +137,25 @@ func runAPI(ctx context.Context, _ []string) error {
 	if err != nil {
 		return err
 	}
+	if err := cfg.RequireAPI(); err != nil {
+		return err
+	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
+	q := db.New(pool)
 	srv := &http.Server{
-		Addr:              cfg.APIAddr,
-		Handler:           api.New(db.New(pool), pool, log),
+		Addr: cfg.APIAddr,
+		Handler: api.New(q, pool, log, api.Options{
+			InternalToken: cfg.InternalAPIToken,
+			AdminName:     cfg.AdminName,
+			BotHealthURL:  cfg.BotHealthURL,
+			Pr0:           api.DBPr0Lookup{Q: q, BaseURL: cfg.Pr0BaseURL},
+			Deezer:        deezer.New(nil, ""),
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      15 * time.Second,
 	}

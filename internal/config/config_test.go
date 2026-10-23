@@ -153,3 +153,20 @@ func TestLoad_Pr0BaseURL(t *testing.T) {
 		t.Errorf("Pr0BaseURL = %q", cfg.Pr0BaseURL)
 	}
 }
+
+func TestRequireAPI_And_AccountVars(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x", "ADMIN_PR0_NAME": "Helix", "BOT_HEALTH_URL": "http://bot:8081/healthz"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AdminName != "Helix" || cfg.BotHealthURL != "http://bot:8081/healthz" {
+		t.Errorf("cfg = %+v", cfg)
+	}
+	if err := cfg.RequireAPI(); err == nil || !strings.Contains(err.Error(), "INTERNAL_API_TOKEN") {
+		t.Errorf("RequireAPI = %v", err)
+	}
+	cfg.InternalAPIToken = "x"
+	if err := cfg.RequireAPI(); err != nil {
+		t.Errorf("RequireAPI = %v", err)
+	}
+}

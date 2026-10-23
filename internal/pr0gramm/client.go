@@ -343,3 +343,26 @@ func (c *Client) Item(ctx context.Context, id int64) (Item, error) {
 	}
 	return Item{}, ErrItemNotFound
 }
+
+// ProfileInfo fetches a user's id and canonical name. Unknown names yield
+// ErrUserNotFound (pr0gramm answers 404/400, or a null user).
+func (c *Client) ProfileInfo(ctx context.Context, name string) (Profile, error) {
+	var r struct {
+		User *struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+		} `json:"user"`
+	}
+	q := url.Values{"name": {name}, "flags": {"1"}}
+	if err := c.call(ctx, http.MethodGet, "/profile/info", q, nil, &r); err != nil {
+		var ae *APIError
+		if errors.As(err, &ae) && (ae.Status == http.StatusNotFound || ae.Status == http.StatusBadRequest) {
+			return Profile{}, ErrUserNotFound
+		}
+		return Profile{}, err
+	}
+	if r.User == nil || r.User.ID <= 0 || r.User.Name == "" {
+		return Profile{}, ErrUserNotFound
+	}
+	return Profile{ID: r.User.ID, Name: r.User.Name}, nil
+}

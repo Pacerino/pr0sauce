@@ -25,7 +25,7 @@ func setup(t *testing.T) (*server, *db.Queries) {
 	t.Helper()
 	pool := testdb.New(t)
 	q := db.New(pool)
-	s := newServer(q, pool, slog.New(slog.NewTextHandler(io.Discard, nil)), time.Now)
+	s := newServer(q, pool, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{})
 	return s, q
 }
 
@@ -389,11 +389,11 @@ func TestStats_CachedFor60s(t *testing.T) {
 	q := db.New(pool)
 	var mu sync.Mutex
 	clock := time.Now()
-	s := newServer(q, pool, slog.New(slog.NewTextHandler(io.Discard, nil)), func() time.Time {
+	s := newServer(q, pool, slog.New(slog.NewTextHandler(io.Discard, nil)), Options{Now: func() time.Time {
 		mu.Lock()
 		defer mu.Unlock()
 		return clock
-	})
+	}})
 	advance := func(d time.Duration) { mu.Lock(); clock = clock.Add(d); mu.Unlock() }
 	hits := func() int64 {
 		_, _, body := get(t, s, "/api/stats")

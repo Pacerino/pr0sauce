@@ -71,3 +71,12 @@ func (e *APIError) Error() string {
 	}
 	return fmt.Sprintf("pr0gramm: %s: status %d: %s", e.Path, e.Status, strings.TrimSpace(body))
 }
+
+// Profile is the subset of /profile/info the site needs.
+type Profile struct {
+	ID   int64
+	Name string
+}
+
+// ErrUserNotFound is returned by ProfileInfo for an unknown user name.
+var ErrUserNotFound = errors.New("pr0gramm: user not found")

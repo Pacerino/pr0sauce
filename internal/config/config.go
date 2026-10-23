@@ -25,6 +25,12 @@ type Config struct {
 	PublicBaseURL       string
 	// Pr0BaseURL overrides the pr0gramm API root; empty means production.
 	Pr0BaseURL string
+	// InternalAPIToken guards /api/internal/*; required by the api command.
+	InternalAPIToken string
+	// AdminName is the pr0gramm name that becomes admin on first login.
+	AdminName string
+	// BotHealthURL is the bot's health endpoint, surfaced to admins.
+	BotHealthURL string
 }
 
 // Load reads configuration via getenv (never os.Getenv directly).
@@ -39,6 +45,9 @@ func Load(getenv func(string) string) (Config, error) {
 		APIAddr:           def(getenv("API_ADDR"), ":8080"),
 		PublicBaseURL:     def(getenv("PUBLIC_BASE_URL"), "https://pr0sauce.info"),
 		Pr0BaseURL:        getenv("PR0_BASE_URL"),
+		InternalAPIToken:  getenv("INTERNAL_API_TOKEN"),
+		AdminName:         strings.TrimSpace(getenv("ADMIN_PR0_NAME")),
+		BotHealthURL:      getenv("BOT_HEALTH_URL"),
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("config: DATABASE_URL is required")
@@ -81,6 +90,11 @@ func (c Config) IsBanned(name string) bool {
 func (c Config) RequireBot() error {
 	return missing(map[string]string{"PR0_USER": c.Pr0User, "PR0_PASSWORD": c.Pr0Password},
 		"PR0_USER", "PR0_PASSWORD")
+}
+
+// RequireAPI checks the variables the api command needs.
+func (c Config) RequireAPI() error {
+	return missing(map[string]string{"INTERNAL_API_TOKEN": c.InternalAPIToken}, "INTERNAL_API_TOKEN")
 }
 
 // RequireLegacy checks the variables import-legacy needs.

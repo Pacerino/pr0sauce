@@ -22,24 +22,50 @@ type server struct {
 	now  func() time.Time
 	mux  *http.ServeMux
 
+	internalToken string
+	adminName     string
+	botHealthURL  string
+	pr0           Pr0Lookup
+	deezer        DeezerSearch
+
 	statsMu      sync.Mutex
 	statsCache   *statsResp
 	statsExpires time.Time
 	compute      func(ctx context.Context, now time.Time) (*statsResp, error)
 }
 
-// New returns the API handler.
-func New(q *db.Queries, pool *pgxpool.Pool, log *slog.Logger) http.Handler {
-	return newServer(q, pool, log, time.Now)
+// Options configures the account/moderation layer. An empty InternalToken
+// makes every /api/internal/* request fail with 401.
+type Options struct {
+	InternalToken string
+	AdminName     string
+	BotHealthURL  string
+	Pr0           Pr0Lookup
+	Deezer        DeezerSearch
+	Now           func() time.Time
 }
 
-func newServer(q *db.Queries, pool *pgxpool.Pool, log *slog.Logger, now func() time.Time) *server {
-	s := &server{q: q, pool: pool, log: log, now: now, mux: http.NewServeMux()}
+// New returns the API handler.
+func New(q *db.Queries, pool *pgxpool.Pool, log *slog.Logger, opts Options) http.Handler {
+	return newServer(q, pool, log, opts)
+}
+
+func newServer(q *db.Queries, pool *pgxpool.Pool, log *slog.Logger, opts Options) *server {
+	now := opts.Now
+	if now == nil {
+		now = time.Now
+	}
+	s := &server{q: q, pool: pool, log: log, now: now, mux: http.NewServeMux(),
+		internalToken: opts.InternalToken, adminName: opts.AdminName, botHealthURL: opts.BotHealthURL,
+		pr0: opts.Pr0, deezer: opts.Deezer}
 	s.compute = s.computeStats
 	s.mux.HandleFunc("GET /api/songs", s.listSongs)
 	s.mux.HandleFunc("GET /api/songs/{itemId}", s.getSong)
 	s.mux.HandleFunc("GET /api/stats", s.stats)
 	s.mux.HandleFunc("GET /healthz", s.healthz)
+	s.mux.Handle("POST /api/internal/sessions", s.internal(http.HandlerFunc(s.createSession)))
+	s.mux.Handle("DELETE /api/internal/sessions", s.internal(s.requireUser(s.deleteSession)))
+	s.mux.Handle("GET /api/internal/me", s.internal(s.requireUser(s.me)))
 	return s
 }
 

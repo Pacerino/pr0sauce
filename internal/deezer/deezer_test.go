@@ -78,3 +78,31 @@ func TestDeezer_ForeignLinkIsNotFound(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+func TestDeezerSearchTrack(t *testing.T) {
+	var q atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q.Store(r.URL.Path + "?" + r.URL.Query().Get("q") + "&limit=" + r.URL.Query().Get("limit"))
+		_, _ = w.Write([]byte(`{"data":[{"link":"https://www.deezer.com/track/9","album":{"cover_big":"https://cdn/c.jpg"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	link, cover, err := deezer.New(nil, srv.URL).SearchTrack(context.Background(), "Daft Punk", "One More Time")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link != "https://www.deezer.com/track/9" || cover != "https://cdn/c.jpg" {
+		t.Errorf("link=%q cover=%q", link, cover)
+	}
+	if want := `/search?artist:"Daft Punk" track:"One More Time"&limit=1`; q.Load() != want {
+		t.Errorf("request = %v, want %v", q.Load(), want)
+	}
+}
+
+func TestDeezerSearchTrack_NoResult(t *testing.T) {
+	for _, body := range []string{`{"data":[]}`, `{"data":[{"link":"https://evil.example/x","album":{}}]}`} {
+		c := serve(t, 200, body, nil, nil)
+		if _, _, err := c.SearchTrack(context.Background(), "a", "b"); !errors.Is(err, deezer.ErrNotFound) {
+			t.Errorf("%s: err = %v", body, err)
+		}
+	}
+}

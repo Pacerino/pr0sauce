@@ -427,3 +427,41 @@ func TestIsRejected(t *testing.T) {
 		}
 	}
 }
+
+func TestProfileInfo_Parses(t *testing.T) {
+	var gotPath, gotName, gotFlags string
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotName, gotFlags = r.URL.Path, r.URL.Query().Get("name"), r.URL.Query().Get("flags")
+		w.Write([]byte(`{"user":{"id":42,"name":"Helix","registered":1}}`))
+	})
+	p, err := c.ProfileInfo(context.Background(), "helix")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ID != 42 || p.Name != "Helix" {
+		t.Errorf("profile = %+v", p)
+	}
+	if gotPath != "/profile/info" || gotName != "helix" || gotFlags != "1" {
+		t.Errorf("request = %q name=%q flags=%q", gotPath, gotName, gotFlags)
+	}
+}
+
+func TestProfileInfo_Unknown(t *testing.T) {
+	for _, status := range []int{404, 400} {
+		c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+			w.Write([]byte(`{"error":"notFound"}`))
+		})
+		if _, err := c.ProfileInfo(context.Background(), "nobody"); !errors.Is(err, ErrUserNotFound) {
+			t.Errorf("status %d: err = %v, want ErrUserNotFound", status, err)
+		}
+	}
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(500) })
+	if _, err := c.ProfileInfo(context.Background(), "x"); err == nil || errors.Is(err, ErrUserNotFound) {
+		t.Errorf("500 err = %v", err)
+	}
+	c, _ = newTestClient(t, func(w http.ResponseWriter, r *http.Request) { w.Write([]byte(`{"user":null}`)) })
+	if _, err := c.ProfileInfo(context.Background(), "x"); !errors.Is(err, ErrUserNotFound) {
+		t.Errorf("null user err = %v", err)
+	}
+}
