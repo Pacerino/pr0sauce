@@ -16,6 +16,7 @@ import (
 
 	"github.com/Pacerino/pr0sauce/internal/db"
 	"github.com/Pacerino/pr0sauce/internal/testdb"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 const testToken = "internal-secret-for-tests"
@@ -296,7 +297,13 @@ func TestDBPr0Lookup_StateErrors(t *testing.T) {
 	if err == nil || strings.Contains(err.Error(), "reading session cookies") {
 		t.Errorf("missing state err = %v", err)
 	}
-	pool.Close()
+	// Close a private pool, never the shared testdb one (later tests use it).
+	own, err := pgxpool.NewWithConfig(context.Background(), pool.Config())
+	if err != nil {
+		t.Fatal(err)
+	}
+	own.Close()
+	l.Q = db.New(own)
 	_, err = l.ProfileInfo(context.Background(), "x")
 	if err == nil || !strings.Contains(err.Error(), "reading session cookies") {
 		t.Errorf("closed pool err = %v, want DB error", err)

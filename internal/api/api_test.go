@@ -207,14 +207,6 @@ func TestGetSong_BadIDs(t *testing.T) {
 	}
 }
 
-func TestGetSong_MissIs404(t *testing.T) {
-	s, q := setup(t)
-	seed(t, q, 5, nil, nil, time.Now())
-	if code, _, _ := get(t, s, "/api/songs/5"); code != 404 {
-		t.Fatalf("code %d", code)
-	}
-}
-
 func TestGetSong_IncludesComment(t *testing.T) {
 	s, q := setup(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)

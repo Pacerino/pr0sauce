@@ -265,18 +265,31 @@ func (q *Queries) ListFailedRequests(ctx context.Context, arg ListFailedRequests
 }
 
 const listHistory = `-- name: ListHistory :many
-select id, item_id, snapshot, source, actor_id, suggestion_id, created_at from song_history where item_id = $1 order by id desc
+select h.id, h.item_id, h.snapshot, h.source, h.actor_id, h.suggestion_id, h.created_at, u.name as actor_name
+from song_history h left join users u on u.id = h.actor_id
+where h.item_id = $1 order by h.id desc
 `
 
-func (q *Queries) ListHistory(ctx context.Context, itemID int64) ([]SongHistory, error) {
+type ListHistoryRow struct {
+	ID           int64
+	ItemID       int64
+	Snapshot     []byte
+	Source       string
+	ActorID      *int64
+	SuggestionID *int64
+	CreatedAt    time.Time
+	ActorName    *string
+}
+
+func (q *Queries) ListHistory(ctx context.Context, itemID int64) ([]ListHistoryRow, error) {
 	rows, err := q.db.Query(ctx, listHistory, itemID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SongHistory
+	var items []ListHistoryRow
 	for rows.Next() {
-		var i SongHistory
+		var i ListHistoryRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ItemID,
@@ -285,6 +298,7 @@ func (q *Queries) ListHistory(ctx context.Context, itemID int64) ([]SongHistory,
 			&i.ActorID,
 			&i.SuggestionID,
 			&i.CreatedAt,
+			&i.ActorName,
 		); err != nil {
 			return nil, err
 		}
@@ -298,10 +312,12 @@ func (q *Queries) ListHistory(ctx context.Context, itemID int64) ([]SongHistory,
 
 const listOpenQueue = `-- name: ListOpenQueue :many
 select s.id, s.item_id, s.user_id, s.title, s.artist, s.album, s.proof_url, s.status, s.reviewer_id, s.reason, s.created_at, s.decided_at, u.name as author_name,
+  so.title as cur_title, so.artist as cur_artist, so.album as cur_album,
   (select count(*) from votes v join users vu on vu.id = v.user_id where v.suggestion_id = s.id and v.value = 1 and vu.banned_at is null)::bigint as up,
   (select count(*) from votes v join users vu on vu.id = v.user_id where v.suggestion_id = s.id and v.value = -1 and vu.banned_at is null)::bigint as down,
   (select coalesce(sum(v.value), 0) from votes v join users vu on vu.id = v.user_id where v.suggestion_id = s.id and vu.banned_at is null)::bigint as net
 from suggestions s join users u on u.id = s.user_id
+join songs so on so.item_id = s.item_id
 where s.status = 'open'
 order by s.created_at, s.id
 limit $2::int offset $1::int
@@ -326,6 +342,9 @@ type ListOpenQueueRow struct {
 	CreatedAt  time.Time
 	DecidedAt  *time.Time
 	AuthorName string
+	CurTitle   *string
+	CurArtist  *string
+	CurAlbum   *string
 	Up         int64
 	Down       int64
 	Net        int64
@@ -354,6 +373,9 @@ func (q *Queries) ListOpenQueue(ctx context.Context, arg ListOpenQueueParams) ([
 			&i.CreatedAt,
 			&i.DecidedAt,
 			&i.AuthorName,
+			&i.CurTitle,
+			&i.CurArtist,
+			&i.CurAlbum,
 			&i.Up,
 			&i.Down,
 			&i.Net,
@@ -424,6 +446,41 @@ func (q *Queries) ListOpenSuggestionsForItem(ctx context.Context, itemID int64) 
 			&i.Down,
 			&i.Net,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserVotesForItem = `-- name: ListUserVotesForItem :many
+select v.suggestion_id, v.value from votes v join suggestions s on s.id = v.suggestion_id
+where s.item_id = $1 and v.user_id = $2 and s.status = 'open'
+`
+
+type ListUserVotesForItemParams struct {
+	ItemID int64
+	UserID int64
+}
+
+type ListUserVotesForItemRow struct {
+	SuggestionID int64
+	Value        int16
+}
+
+func (q *Queries) ListUserVotesForItem(ctx context.Context, arg ListUserVotesForItemParams) ([]ListUserVotesForItemRow, error) {
+	rows, err := q.db.Query(ctx, listUserVotesForItem, arg.ItemID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUserVotesForItemRow
+	for rows.Next() {
+		var i ListUserVotesForItemRow
+		if err := rows.Scan(&i.SuggestionID, &i.Value); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

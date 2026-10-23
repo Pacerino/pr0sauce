@@ -32,8 +32,10 @@ type comment struct {
 
 type songJSON struct {
 	ItemID       int64    `json:"itemId"`
-	Title        string   `json:"title"`
-	Artist       string   `json:"artist"`
+	Found        bool     `json:"found"`
+	Corrected    *string  `json:"corrected"`
+	Title        *string  `json:"title"`
+	Artist       *string  `json:"artist"`
 	Album        *string  `json:"album"`
 	Provider     string   `json:"provider"`
 	SpotifyURL   *string  `json:"spotifyUrl"`
@@ -49,23 +51,38 @@ type songJSON struct {
 	YoutubeSearchURL *string `json:"youtubeSearchUrl"`
 }
 
+// Providers a correction writes; the page shows them as "korrigiert durch …".
+const (
+	providerCommunity  = "community"
+	providerModeration = "moderation"
+)
+
 func toSong(s db.Song) songJSON {
 	out := songJSON{
-		ItemID: s.ItemID, Album: s.Album, Provider: s.Provider,
-		SpotifyURL: s.SpotifyUrl, YoutubeURL: s.YoutubeUrl, CoverURL: s.CoverUrl,
+		ItemID: s.ItemID, Provider: s.Provider,
 		RecognizedAt: s.RecognizedAt.UTC().Format(time.RFC3339Nano),
 	}
-	if s.Title != nil {
-		out.Title = *s.Title
+	if s.Provider == providerCommunity || s.Provider == providerModeration {
+		p := s.Provider
+		out.Corrected = &p
 	}
+	// A null title is a miss: the bot looked the item up but recognized nothing.
+	if s.Title == nil {
+		return out
+	}
+	out.Found = true
+	out.Title, out.Album = s.Title, s.Album
+	artist := ""
 	if s.Artist != nil {
-		out.Artist = *s.Artist
+		out.Artist = s.Artist
+		artist = *s.Artist
 	}
+	out.SpotifyURL, out.YoutubeURL, out.CoverURL = s.SpotifyUrl, s.YoutubeUrl, s.CoverUrl
 	out.AppleMusicURL = s.AppleMusicUrl
 	out.DeezerURL = s.DeezerUrl
 	out.SongLinkURL = songLinkURL(s.AppleMusicUrl)
-	out.SpotifySearchURL = nilIfEmpty(spotifySearchURL(out.Artist, out.Title))
-	out.YoutubeSearchURL = nilIfEmpty(youtubeSearchURL(out.Artist, out.Title))
+	out.SpotifySearchURL = nilIfEmpty(spotifySearchURL(artist, *s.Title))
+	out.YoutubeSearchURL = nilIfEmpty(youtubeSearchURL(artist, *s.Title))
 	return out
 }
 
@@ -221,7 +238,7 @@ func (s *server) getSong(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	song, err := s.q.GetSong(r.Context(), id)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && song.Title == nil) {
+	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, http.StatusNotFound, "song not found")
 		return
 	}

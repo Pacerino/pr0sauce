@@ -17,10 +17,12 @@ order by net desc, s.created_at, s.id;
 
 -- name: ListOpenQueue :many
 select s.*, u.name as author_name,
+  so.title as cur_title, so.artist as cur_artist, so.album as cur_album,
   (select count(*) from votes v join users vu on vu.id = v.user_id where v.suggestion_id = s.id and v.value = 1 and vu.banned_at is null)::bigint as up,
   (select count(*) from votes v join users vu on vu.id = v.user_id where v.suggestion_id = s.id and v.value = -1 and vu.banned_at is null)::bigint as down,
   (select coalesce(sum(v.value), 0) from votes v join users vu on vu.id = v.user_id where v.suggestion_id = s.id and vu.banned_at is null)::bigint as net
 from suggestions s join users u on u.id = s.user_id
+join songs so on so.item_id = s.item_id
 where s.status = 'open'
 order by s.created_at, s.id
 limit sqlc.arg(lim)::int offset sqlc.arg(off)::int;
@@ -44,6 +46,10 @@ where user_id = $1 and status = 'open';
 insert into votes (suggestion_id, user_id, value) values ($1, $2, $3)
 on conflict (suggestion_id, user_id) do update set value = excluded.value;
 
+-- name: ListUserVotesForItem :many
+select v.suggestion_id, v.value from votes v join suggestions s on s.id = v.suggestion_id
+where s.item_id = $1 and v.user_id = $2 and s.status = 'open';
+
 -- name: DeleteVote :exec
 delete from votes where suggestion_id = $1 and user_id = $2;
 
@@ -61,7 +67,9 @@ values ($1, $2, $3, $4, $5)
 returning *;
 
 -- name: ListHistory :many
-select * from song_history where item_id = $1 order by id desc;
+select h.*, u.name as actor_name
+from song_history h left join users u on u.id = h.actor_id
+where h.item_id = $1 order by h.id desc;
 
 -- name: GetHistory :one
 select * from song_history where id = $1;
