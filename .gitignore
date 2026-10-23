@@ -11,3 +11,6 @@ web/.next/
 web/next-env.d.ts
 web/*.tsbuildinfo
 web/AGENTS.md
+
+# local MCP config (owner keeps it out of the repo)
+/.mcp.json

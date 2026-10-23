@@ -116,7 +116,12 @@ func runBot(ctx context.Context, _ []string) error {
 	if serr != nil {
 		log.Warn("sentry disabled: init failed", "err", serr)
 	}
-	return bot.Run(ctx, cfg, log)
+	err = bot.Run(ctx, cfg, log)
+	if err != nil && enabled {
+		sentry.CaptureException(err)
+		sentry.Flush(5 * time.Second)
+	}
+	return err
 }
 
 func runBotLogin(ctx context.Context, args []string) error {

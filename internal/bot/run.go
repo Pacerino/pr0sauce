@@ -305,7 +305,11 @@ func (r *runner) setInvalid() {
 	}
 	r.startupUnknown = false
 	r.nextCheck = r.clock.Now().Add(r.recheck)
-	r.log.Error(loginHint)
+	if prev != sessionInvalid {
+		r.log.Error(loginHint)
+	} else {
+		r.log.Warn(loginHint) // repeat while still invalid: no new Sentry event
+	}
 }
 
 func (r *runner) setUnknown(cause error) {

@@ -1,7 +1,10 @@
 package bot
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -146,5 +149,18 @@ func TestRunner_GuardReportsAndRepanics(t *testing.T) {
 	}
 	if len(tel.panics) != 1 || tel.panics[0] != "boom" {
 		t.Fatalf("reported panics = %v", tel.panics)
+	}
+}
+
+func TestRunner_LoginHintErrorOnlyOnTransition(t *testing.T) {
+	var buf bytes.Buffer
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	r := &runner{log: log, health: &health{}, clock: &manualClock{}, tel: &recTel{}, recheck: time.Hour}
+	r.health.setSession(sessionOK)
+	r.setInvalid()
+	r.setInvalid()
+	out := buf.String()
+	if strings.Count(out, "level=ERROR") != 1 || strings.Count(out, "level=WARN") != 1 {
+		t.Fatalf("log levels wrong:\n%s", out)
 	}
 }
