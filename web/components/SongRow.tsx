@@ -11,8 +11,8 @@ export function SongRow({ song, now }: { song: Song; now: Date }) {
     >
       <Cover song={song} size={34} />
       <div className="min-w-0 flex-1">
-        <div className="truncate">{song.title}</div>
-        <div className="truncate text-xs text-[#888]">{song.artist}</div>
+        <div className="truncate">{song.title ?? "Nicht erkannt"}</div>
+        <div className="truncate text-xs text-[#888]">{song.artist ?? ""}</div>
       </div>
       <div className="flex-none text-right text-[11px] text-[#888]">
         <div>#{song.itemId}</div>

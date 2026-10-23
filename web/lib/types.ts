@@ -8,9 +8,12 @@ export type BotComment = {
 
 export type Song = {
   itemId: number;
-  title: string;
-  artist: string;
+  /** null on a miss (found === false) */
+  title: string | null;
+  artist: string | null;
   album: string | null;
+  found: boolean;
+  corrected: "community" | "moderation" | null;
   provider: string;
   spotifyUrl: string | null;
   youtubeUrl: string | null;
@@ -24,6 +27,21 @@ export type Song = {
   recognizedAt: string;
   /** Only set by the single-song endpoint; null in lists. */
   comment: BotComment | null;
+};
+
+export type Suggestion = {
+  id: number;
+  title: string;
+  artist: string;
+  album: string | null;
+  proofUrl: string | null;
+  author: string;
+  up: number;
+  down: number;
+  net: number;
+  myVote: number | null;
+  mine: boolean;
+  createdAt: string;
 };
 
 export type SongList = {
