@@ -495,3 +495,63 @@ func TestSearch_QueryLengthCap(t *testing.T) {
 		t.Fatalf("padded = %d", code)
 	}
 }
+
+func TestGetSong_IncludesStreamingLinks(t *testing.T) {
+	s, q := setup(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	if err := q.UpsertSong(context.Background(), db.UpsertSongParams{
+		ItemID: 20, Title: str("Kumite"), Artist: str("Paul Hertzog"), Provider: "shazam", RecognizedAt: now,
+		AppleMusicUrl: str("https://music.apple.com/gb/album/x/1597617995?i=1597618301"),
+		Isrc:          str("TCAFX2160415"),
+		DeezerUrl:     str("https://www.deezer.com/track/1568632112"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := q.UpsertSong(context.Background(), db.UpsertSongParams{
+		ItemID: 21, Title: str("Old"), Artist: str("Band"), Provider: "shazam", RecognizedAt: now,
+		SpotifyUrl: str("https://open.spotify.com/track/abc"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/api/songs/20", "/api/songs"} {
+		code, _, body := get(t, s, path)
+		if code != 200 {
+			t.Fatalf("%d %s", code, body)
+		}
+		var m map[string]any
+		if path == "/api/songs" {
+			var l testList
+			_ = json.Unmarshal(body, &l)
+			for _, it := range l.Items {
+				if it["itemId"].(float64) == 20 {
+					m = it
+				}
+			}
+		} else {
+			_ = json.Unmarshal(body, &m)
+		}
+		want := map[string]string{
+			"appleMusicUrl":    "https://music.apple.com/gb/album/x/1597617995?i=1597618301",
+			"deezerUrl":        "https://www.deezer.com/track/1568632112",
+			"songLinkUrl":      "https://song.link/i/1597618301",
+			"spotifySearchUrl": "https://open.spotify.com/search/Paul%20Hertzog%20Kumite",
+			"youtubeSearchUrl": "https://www.youtube.com/results?search_query=Paul+Hertzog+Kumite",
+		}
+		for k, v := range want {
+			if m[k] != v {
+				t.Errorf("%s %s = %v, want %s", path, k, m[k], v)
+			}
+		}
+	}
+	_, _, body := get(t, s, "/api/songs/21")
+	var m map[string]any
+	_ = json.Unmarshal(body, &m)
+	for _, k := range []string{"appleMusicUrl", "deezerUrl", "songLinkUrl"} {
+		if v, ok := m[k]; !ok || v != nil {
+			t.Errorf("%s should be null: %s", k, body)
+		}
+	}
+	if m["spotifySearchUrl"] == nil || m["youtubeSearchUrl"] == nil {
+		t.Errorf("search urls missing: %s", body)
+	}
+}

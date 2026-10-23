@@ -41,6 +41,12 @@ type songJSON struct {
 	CoverURL     *string  `json:"coverUrl"`
 	RecognizedAt string   `json:"recognizedAt"`
 	Comment      *comment `json:"comment"`
+
+	AppleMusicURL    *string `json:"appleMusicUrl"`
+	DeezerURL        *string `json:"deezerUrl"`
+	SongLinkURL      *string `json:"songLinkUrl"`
+	SpotifySearchURL *string `json:"spotifySearchUrl"`
+	YoutubeSearchURL *string `json:"youtubeSearchUrl"`
 }
 
 func toSong(s db.Song) songJSON {
@@ -55,6 +61,11 @@ func toSong(s db.Song) songJSON {
 	if s.Artist != nil {
 		out.Artist = *s.Artist
 	}
+	out.AppleMusicURL = s.AppleMusicUrl
+	out.DeezerURL = s.DeezerUrl
+	out.SongLinkURL = songLinkURL(s.AppleMusicUrl)
+	out.SpotifySearchURL = nilIfEmpty(spotifySearchURL(out.Artist, out.Title))
+	out.YoutubeSearchURL = nilIfEmpty(youtubeSearchURL(out.Artist, out.Title))
 	return out
 }
 
