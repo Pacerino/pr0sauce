@@ -34,11 +34,13 @@ type Result struct {
 	Album         string
 	CoverURL      string
 	AppleMusicURL string
+	ISRC          string
 }
 
 type response struct {
 	Track struct {
 		Title    string `json:"title"`
+		ISRC     string `json:"isrc"`
 		Subtitle string `json:"subtitle"`
 		Images   struct {
 			CoverArtHQ string `json:"coverarthq"`
@@ -99,7 +101,7 @@ func (c *Client) Recognize(ctx context.Context, videoURL string) (Result, error)
 		return Result{}, fmt.Errorf("recognize: decode: %w", err)
 	}
 	t := r.Track
-	res := Result{Found: t.Title != "", Title: t.Title, Artist: t.Subtitle, CoverURL: t.Images.CoverArtHQ}
+	res := Result{Found: t.Title != "", Title: t.Title, Artist: t.Subtitle, ISRC: t.ISRC, CoverURL: t.Images.CoverArtHQ}
 	if res.CoverURL == "" {
 		res.CoverURL = t.Images.CoverArt
 	}

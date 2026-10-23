@@ -11,7 +11,7 @@ import (
 )
 
 const getSong = `-- name: GetSong :one
-select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at from songs where item_id = $1
+select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url from songs where item_id = $1
 `
 
 func (q *Queries) GetSong(ctx context.Context, itemID int64) (Song, error) {
@@ -29,12 +29,15 @@ func (q *Queries) GetSong(ctx context.Context, itemID int64) (Song, error) {
 		&i.YoutubeID,
 		&i.CoverUrl,
 		&i.RecognizedAt,
+		&i.AppleMusicUrl,
+		&i.Isrc,
+		&i.DeezerUrl,
 	)
 	return i, err
 }
 
 const listRecentSongs = `-- name: ListRecentSongs :many
-select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at from songs
+select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url from songs
 where title is not null
   and (recognized_at, item_id) < ($1::timestamptz, $2::bigint)
 order by recognized_at desc, item_id desc
@@ -69,6 +72,9 @@ func (q *Queries) ListRecentSongs(ctx context.Context, arg ListRecentSongsParams
 			&i.YoutubeID,
 			&i.CoverUrl,
 			&i.RecognizedAt,
+			&i.AppleMusicUrl,
+			&i.Isrc,
+			&i.DeezerUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -81,7 +87,7 @@ func (q *Queries) ListRecentSongs(ctx context.Context, arg ListRecentSongsParams
 }
 
 const searchSongs = `-- name: SearchSongs :many
-select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at from songs
+select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url from songs
 where title is not null
   and (title ilike $1::text escape '\' or artist ilike $1::text escape '\')
 order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), $2::text) desc, recognized_at desc, item_id desc
@@ -122,6 +128,9 @@ func (q *Queries) SearchSongs(ctx context.Context, arg SearchSongsParams) ([]Son
 			&i.YoutubeID,
 			&i.CoverUrl,
 			&i.RecognizedAt,
+			&i.AppleMusicUrl,
+			&i.Isrc,
+			&i.DeezerUrl,
 		); err != nil {
 			return nil, err
 		}
@@ -134,27 +143,31 @@ func (q *Queries) SearchSongs(ctx context.Context, arg SearchSongsParams) ([]Son
 }
 
 const upsertSong = `-- name: UpsertSong :exec
-insert into songs (item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+insert into songs (item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 on conflict (item_id) do update set
   title = excluded.title, artist = excluded.artist, album = excluded.album,
   provider = excluded.provider, spotify_url = excluded.spotify_url, spotify_id = excluded.spotify_id,
   youtube_url = excluded.youtube_url, youtube_id = excluded.youtube_id,
-  cover_url = excluded.cover_url, recognized_at = excluded.recognized_at
+  cover_url = excluded.cover_url, recognized_at = excluded.recognized_at,
+  apple_music_url = excluded.apple_music_url, isrc = excluded.isrc, deezer_url = excluded.deezer_url
 `
 
 type UpsertSongParams struct {
-	ItemID       int64
-	Title        *string
-	Artist       *string
-	Album        *string
-	Provider     string
-	SpotifyUrl   *string
-	SpotifyID    *string
-	YoutubeUrl   *string
-	YoutubeID    *string
-	CoverUrl     *string
-	RecognizedAt time.Time
+	ItemID        int64
+	Title         *string
+	Artist        *string
+	Album         *string
+	Provider      string
+	SpotifyUrl    *string
+	SpotifyID     *string
+	YoutubeUrl    *string
+	YoutubeID     *string
+	CoverUrl      *string
+	RecognizedAt  time.Time
+	AppleMusicUrl *string
+	Isrc          *string
+	DeezerUrl     *string
 }
 
 func (q *Queries) UpsertSong(ctx context.Context, arg UpsertSongParams) error {
@@ -170,6 +183,9 @@ func (q *Queries) UpsertSong(ctx context.Context, arg UpsertSongParams) error {
 		arg.YoutubeID,
 		arg.CoverUrl,
 		arg.RecognizedAt,
+		arg.AppleMusicUrl,
+		arg.Isrc,
+		arg.DeezerUrl,
 	)
 	return err
 }

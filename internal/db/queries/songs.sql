@@ -2,13 +2,14 @@
 select * from songs where item_id = $1;
 
 -- name: UpsertSong :exec
-insert into songs (item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at)
-values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+insert into songs (item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at, apple_music_url, isrc, deezer_url)
+values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 on conflict (item_id) do update set
   title = excluded.title, artist = excluded.artist, album = excluded.album,
   provider = excluded.provider, spotify_url = excluded.spotify_url, spotify_id = excluded.spotify_id,
   youtube_url = excluded.youtube_url, youtube_id = excluded.youtube_id,
-  cover_url = excluded.cover_url, recognized_at = excluded.recognized_at;
+  cover_url = excluded.cover_url, recognized_at = excluded.recognized_at,
+  apple_music_url = excluded.apple_music_url, isrc = excluded.isrc, deezer_url = excluded.deezer_url;
 
 -- name: ListRecentSongs :many
 -- Hits only, newest first. Keyset: rows strictly older than (before_recognized_at, before_item_id).

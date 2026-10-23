@@ -421,3 +421,32 @@ func TestLatestBotCommentTime_Empty(t *testing.T) {
 		t.Fatalf("got %v, %v; want nil", got, err)
 	}
 }
+
+func TestUpsertSong_StoresStreamingLinks(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	p := hit(5, "t", "a", time.Now())
+	p.AppleMusicUrl = ptr("https://music.apple.com/x")
+	p.Isrc = ptr("TCAFX2160415")
+	p.DeezerUrl = ptr("https://www.deezer.com/track/1")
+	if err := q.UpsertSong(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	s, err := q.GetSong(ctx, 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.AppleMusicUrl == nil || *s.AppleMusicUrl != *p.AppleMusicUrl || s.Isrc == nil || *s.Isrc != *p.Isrc || s.DeezerUrl == nil || *s.DeezerUrl != *p.DeezerUrl {
+		t.Fatalf("round trip: %+v", s)
+	}
+	// conflict path overwrites the new columns too
+	p.DeezerUrl = nil
+	if err := q.UpsertSong(ctx, p); err != nil {
+		t.Fatal(err)
+	}
+	s, _ = q.GetSong(ctx, 5)
+	if s.DeezerUrl != nil || s.Isrc == nil {
+		t.Fatalf("after update: %+v", s)
+	}
+}

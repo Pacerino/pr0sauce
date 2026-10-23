@@ -42,6 +42,9 @@ func TestRecognize_ParsesKumiteFixture(t *testing.T) {
 	if r.CoverURL == "" || !strings.HasPrefix(r.AppleMusicURL, "https://music.apple.com/") {
 		t.Errorf("cover/apple: %+v", r)
 	}
+	if r.ISRC != "TCAFX2160415" {
+		t.Errorf("isrc %q", r.ISRC)
+	}
 }
 
 func TestRecognize_NoMatch(t *testing.T) {

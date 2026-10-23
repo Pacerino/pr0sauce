@@ -43,15 +43,18 @@ type Request struct {
 }
 
 type Song struct {
-	ItemID       int64
-	Title        *string
-	Artist       *string
-	Album        *string
-	Provider     string
-	SpotifyUrl   *string
-	SpotifyID    *string
-	YoutubeUrl   *string
-	YoutubeID    *string
-	CoverUrl     *string
-	RecognizedAt time.Time
+	ItemID        int64
+	Title         *string
+	Artist        *string
+	Album         *string
+	Provider      string
+	SpotifyUrl    *string
+	SpotifyID     *string
+	YoutubeUrl    *string
+	YoutubeID     *string
+	CoverUrl      *string
+	RecognizedAt  time.Time
+	AppleMusicUrl *string
+	Isrc          *string
+	DeezerUrl     *string
 }
