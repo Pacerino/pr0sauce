@@ -93,3 +93,13 @@ left join requests n on n.id = (select id from requests where status = 'pending'
 select l.updated_at as last_done_at
 from (select 1) d
 left join requests l on l.id = (select id from requests where status = 'done' order by updated_at desc, id desc limit 1);
+
+-- name: ListVotesForSuggestion :many
+select v.user_id, u.name, v.value, (u.banned_at is not null)::boolean as banned, v.created_at
+from votes v join users u on u.id = v.user_id
+where v.suggestion_id = $1
+order by v.created_at desc, v.user_id desc;
+
+-- name: CountMarkReadBacklog :one
+select count(*)::bigint from requests
+where status in ('done', 'skipped', 'failed') and marked_read = false;

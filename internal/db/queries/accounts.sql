@@ -42,3 +42,12 @@ where token_hash = sqlc.arg(token_hash)
 
 -- name: DeleteSession :exec
 delete from sessions where token_hash = $1;
+
+-- name: DeleteSessionsOfUser :exec
+delete from sessions where user_id = $1;
+
+-- name: UpsertUserByPr0ID :one
+-- Creates the user or refreshes the name; role, ban and last_login_at are untouched.
+insert into users (pr0_user_id, name) values ($1, $2)
+on conflict (pr0_user_id) do update set name = excluded.name
+returning *;

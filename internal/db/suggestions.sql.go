@@ -25,6 +25,18 @@ func (q *Queries) CloseOpenSuggestionsOfUser(ctx context.Context, arg CloseOpenS
 	return err
 }
 
+const countMarkReadBacklog = `-- name: CountMarkReadBacklog :one
+select count(*)::bigint from requests
+where status in ('done', 'skipped', 'failed') and marked_read = false
+`
+
+func (q *Queries) CountMarkReadBacklog(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, countMarkReadBacklog)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countRequestsByStatus = `-- name: CountRequestsByStatus :many
 select status, count(*)::bigint as n from requests group by status order by status
 `
@@ -481,6 +493,47 @@ func (q *Queries) ListUserVotesForItem(ctx context.Context, arg ListUserVotesFor
 	for rows.Next() {
 		var i ListUserVotesForItemRow
 		if err := rows.Scan(&i.SuggestionID, &i.Value); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVotesForSuggestion = `-- name: ListVotesForSuggestion :many
+select v.user_id, u.name, v.value, (u.banned_at is not null)::boolean as banned, v.created_at
+from votes v join users u on u.id = v.user_id
+where v.suggestion_id = $1
+order by v.created_at desc, v.user_id desc
+`
+
+type ListVotesForSuggestionRow struct {
+	UserID    int64
+	Name      string
+	Value     int16
+	Banned    bool
+	CreatedAt time.Time
+}
+
+func (q *Queries) ListVotesForSuggestion(ctx context.Context, suggestionID int64) ([]ListVotesForSuggestionRow, error) {
+	rows, err := q.db.Query(ctx, listVotesForSuggestion, suggestionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVotesForSuggestionRow
+	for rows.Next() {
+		var i ListVotesForSuggestionRow
+		if err := rows.Scan(
+			&i.UserID,
+			&i.Name,
+			&i.Value,
+			&i.Banned,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

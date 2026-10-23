@@ -54,6 +54,15 @@ func (q *Queries) DeleteSession(ctx context.Context, tokenHash []byte) error {
 	return err
 }
 
+const deleteSessionsOfUser = `-- name: DeleteSessionsOfUser :exec
+delete from sessions where user_id = $1
+`
+
+func (q *Queries) DeleteSessionsOfUser(ctx context.Context, userID int64) error {
+	_, err := q.db.Exec(ctx, deleteSessionsOfUser, userID)
+	return err
+}
+
 const getSessionUser = `-- name: GetSessionUser :one
 select u.id, u.pr0_user_id, u.name, u.role, u.banned_at, u.ban_reason, u.created_at, u.last_login_at from sessions s join users u on u.id = s.user_id
 where s.token_hash = $1 and s.expires_at > $2::timestamptz
@@ -239,6 +248,34 @@ func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) (int
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const upsertUserByPr0ID = `-- name: UpsertUserByPr0ID :one
+insert into users (pr0_user_id, name) values ($1, $2)
+on conflict (pr0_user_id) do update set name = excluded.name
+returning id, pr0_user_id, name, role, banned_at, ban_reason, created_at, last_login_at
+`
+
+type UpsertUserByPr0IDParams struct {
+	Pr0UserID int64
+	Name      string
+}
+
+// Creates the user or refreshes the name; role, ban and last_login_at are untouched.
+func (q *Queries) UpsertUserByPr0ID(ctx context.Context, arg UpsertUserByPr0IDParams) (User, error) {
+	row := q.db.QueryRow(ctx, upsertUserByPr0ID, arg.Pr0UserID, arg.Name)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Pr0UserID,
+		&i.Name,
+		&i.Role,
+		&i.BannedAt,
+		&i.BanReason,
+		&i.CreatedAt,
+		&i.LastLoginAt,
+	)
+	return i, err
 }
 
 const upsertUserLogin = `-- name: UpsertUserLogin :one

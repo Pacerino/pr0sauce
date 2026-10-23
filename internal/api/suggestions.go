@@ -312,6 +312,10 @@ func (s *server) approveSuggestion(w http.ResponseWriter, r *http.Request, mod d
 		writeError(w, http.StatusConflict, "suggestion is not open")
 		return
 	}
+	if mod.Role == "moderator" && sug.UserID == mod.ID {
+		writeError(w, http.StatusForbidden, "Eigener Vorschlag")
+		return
+	}
 	hit := s.searchDeezer(r.Context(), sug.Artist, sug.Title) // before the tx: no lock across the network
 	switch err := s.accept(r.Context(), sug.ID, approvedByMod(mod.ID), hit); {
 	case err == nil:
