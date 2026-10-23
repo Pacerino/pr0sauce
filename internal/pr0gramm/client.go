@@ -145,6 +145,18 @@ func IsRetryable(err error) bool {
 	return errors.As(err, &ne)
 }
 
+// IsRejected reports whether pr0gramm explicitly refused the request, so it
+// definitely did not take effect: status 429, or a non-5xx answer whose body
+// says commentTooSoon. Network errors and 5xx are ambiguous and return false.
+func IsRejected(err error) bool {
+	var ae *APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	return ae.Status == http.StatusTooManyRequests ||
+		(ae.Status < 500 && strings.Contains(ae.Body, "commentTooSoon"))
+}
+
 // IsAuthError reports whether err is an APIError with status 401 or 403.
 // A caller should confirm with SessionValid, since Cloudflare challenges also
 // return 403.

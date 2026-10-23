@@ -3,6 +3,7 @@ package pr0gramm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -346,5 +347,37 @@ func TestTooLargeResponse(t *testing.T) {
 	_, err := c.InboxComments(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "response too large") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestIsRejected(t *testing.T) {
+	yes := []error{
+		&APIError{Status: 429},
+		&APIError{Status: 200, Body: `{"success":false,"error":"commentTooSoon"}`},
+		&APIError{Status: 400, Body: `{"error":"commentTooSoon"}`},
+		fmt.Errorf("wrapped: %w", &APIError{Status: 429}),
+	}
+	for _, err := range yes {
+		if !IsRejected(err) {
+			t.Errorf("IsRejected(%v) = false; want true", err)
+		}
+	}
+	srv := httptest.NewServer(http.NotFoundHandler())
+	c := New(nil, srv.URL)
+	srv.Close()
+	_, netErr := c.InboxComments(context.Background())
+	no := []error{
+		nil,
+		errors.New("x"),
+		netErr,
+		&APIError{Status: 500},
+		&APIError{Status: 503, Body: "commentTooSoon"},
+		&APIError{Status: 400, Body: `{"error":"other"}`},
+		&APIError{Status: 403},
+	}
+	for _, err := range no {
+		if IsRejected(err) {
+			t.Errorf("IsRejected(%v) = true; want false", err)
+		}
 	}
 }
