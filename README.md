@@ -13,3 +13,12 @@ Configuration: copy `.env.example` to `.env`.
 ## Development
 
     make test
+
+### Shazam sidecar (Python)
+
+Tests need a local venv (Python 3.13, ffmpeg for real recognition):
+
+    uv venv -p 3.13 shazam/.venv
+    uv pip install -p shazam/.venv/bin/python -r shazam/requirements-dev.txt
+
+Image: `docker build -t pr0sauce-shazam:dev shazam/`
