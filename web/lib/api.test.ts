@@ -43,6 +43,14 @@ describe("api", () => {
     expect(init.cache).toBe("no-store");
   });
 
+  it("songs() percent-encodes a Cyrillic query", async () => {
+    fetchMock.mockResolvedValue(json({ items: [], nextCursor: null }));
+    await api.songs({ q: "Новая" });
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://example.test:9000/api/songs?q=%D0%9D%D0%BE%D0%B2%D0%B0%D1%8F",
+    );
+  });
+
   it("stats() revalidates for 60s", async () => {
     fetchMock.mockResolvedValue(json({}));
     await api.stats();
