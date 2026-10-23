@@ -14,6 +14,8 @@ func (c *Client) cookieURL() *url.URL {
 }
 
 // ExportCookies serializes the session cookies as JSON of []http.Cookie.
+// The jar only exposes name and value, so expiry is not preserved; callers
+// must call SessionValid after ImportCookies.
 func (c *Client) ExportCookies() ([]byte, error) {
 	cs := c.http.Jar.Cookies(c.cookieURL())
 	out := make([]http.Cookie, 0, len(cs))
@@ -23,7 +25,8 @@ func (c *Client) ExportCookies() ([]byte, error) {
 	return json.Marshal(out)
 }
 
-// ImportCookies restores cookies exported by ExportCookies.
+// ImportCookies restores cookies exported by ExportCookies. Expiry is not
+// preserved, so callers must call SessionValid afterwards.
 func (c *Client) ImportCookies(data []byte) error {
 	var in []http.Cookie
 	if err := json.Unmarshal(data, &in); err != nil {

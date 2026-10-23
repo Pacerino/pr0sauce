@@ -310,3 +310,41 @@ func TestAddTagsMarkReadSendMessage(t *testing.T) {
 		t.Fatalf("markread %q", got[2])
 	}
 }
+
+func TestSessionValid_403HTMLIsErr(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(403)
+		w.Write([]byte(`<html><body>Just a moment...</body></html>`))
+	})
+	ok, err := c.SessionValid(context.Background())
+	if ok || err == nil {
+		t.Fatalf("ok=%v err=%v", ok, err)
+	}
+}
+
+func TestAPIError_BodyTruncatedStillDetectsCommentTooSoon(t *testing.T) {
+	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"success":false,"error":"commentTooSoon","pad":"` + strings.Repeat("x", 100000) + `"}`))
+	})
+	setMe(t, c, srv)
+	err := c.PostComment(context.Background(), 1, 2, "x")
+	var ae *APIError
+	if !errors.As(err, &ae) || len(ae.Body) != 4096 {
+		t.Fatalf("err=%v", err)
+	}
+	if !IsRetryable(err) {
+		t.Fatal("must still be retryable")
+	}
+}
+
+func TestTooLargeResponse(t *testing.T) {
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"messages":[],"pad":"`))
+		w.Write([]byte(strings.Repeat("x", 9<<20)))
+		w.Write([]byte(`"}`))
+	})
+	_, err := c.InboxComments(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "response too large") {
+		t.Fatalf("err=%v", err)
+	}
+}

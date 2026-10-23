@@ -20,6 +20,7 @@ const (
 	DefaultBaseURL = "https://pr0gramm.com/api"
 	userAgent      = "pr0sauce-bot (+https://pr0sauce.info)"
 	maxBody        = 8 << 20
+	maxErrBody     = 4 << 10
 )
 
 // Client talks to the pr0gramm API. It holds the session in a cookie jar.
@@ -77,12 +78,15 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 		return nil, err
 	}
 	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBody))
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, &APIError{Path: path, Status: resp.StatusCode, Body: string(data)}
+		return nil, newAPIError(path, resp.StatusCode, data)
+	}
+	if len(data) > maxBody {
+		return nil, fmt.Errorf("pr0gramm: %s: response too large", path)
 	}
 	return data, nil
 }
@@ -97,7 +101,7 @@ func (c *Client) call(ctx context.Context, method, path string, query, form url.
 		Success *bool `json:"success"`
 	}
 	if json.Unmarshal(data, &probe) == nil && probe.Success != nil && !*probe.Success {
-		return &APIError{Path: path, Status: http.StatusOK, Body: string(data)}
+		return newAPIError(path, http.StatusOK, data)
 	}
 	if out != nil {
 		if err := json.Unmarshal(data, out); err != nil {
@@ -114,6 +118,13 @@ func (c *Client) post(ctx context.Context, path string, form url.Values) error {
 	}
 	form.Set("_nonce", n)
 	return c.call(ctx, http.MethodPost, path, nil, form, nil)
+}
+
+func newAPIError(path string, status int, body []byte) *APIError {
+	if len(body) > maxErrBody {
+		body = body[:maxErrBody]
+	}
+	return &APIError{Path: path, Status: status, Body: string(body)}
 }
 
 // IsRetryable reports whether err is transient: network errors, 5xx, 429 and
@@ -178,17 +189,33 @@ func (c *Client) Login(ctx context.Context, name, password, token, captcha strin
 	return fmt.Errorf("%w: %s", ErrLoginFailed, r.Error)
 }
 
-// SessionValid checks the session via /user/identifier. 401/403 means invalid
-// and yields (false, nil); any other error is returned.
+// SessionValid checks the session via /user/identifier. A 401/403 whose body
+// is a JSON object with "error" or "code" (the API's logged-out answer) yields
+// (false, nil). Any other failure, including a Cloudflare HTML 403 challenge,
+// is returned as an error.
 func (c *Client) SessionValid(ctx context.Context) (bool, error) {
 	_, err := c.do(ctx, http.MethodGet, "/user/identifier", nil, nil)
 	if err == nil {
 		return true, nil
 	}
-	if IsAuthError(err) {
+	var ae *APIError
+	if errors.As(err, &ae) && IsAuthError(err) && isAPIJSONError(ae.Body) {
 		return false, nil
 	}
 	return false, err
+}
+
+func isAPIJSONError(body string) bool {
+	if !json.Valid([]byte(body)) {
+		return false
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal([]byte(body), &m) != nil {
+		return false
+	}
+	_, hasErr := m["error"]
+	_, hasCode := m["code"]
+	return hasErr || hasCode
 }
 
 // InboxComments lists inbox comments without marking them read.
