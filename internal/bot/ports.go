@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/Pacerino/pr0sauce/internal/db"
-	"github.com/Pacerino/pr0sauce/internal/odesli"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 )
@@ -27,9 +26,10 @@ type Recognizer interface {
 	Recognize(ctx context.Context, videoURL string) (recognize.Result, error)
 }
 
-// Linker resolves streaming links for a song URL.
+// Linker resolves the Deezer track URL for an ISRC. It returns
+// deezer.ErrNotFound when Deezer has no such track.
 type Linker interface {
-	Links(ctx context.Context, url string) (odesli.Links, error)
+	DeezerURL(ctx context.Context, isrc string) (string, error)
 }
 
 // Store is the persistence the bot needs. GetSong and GetState return

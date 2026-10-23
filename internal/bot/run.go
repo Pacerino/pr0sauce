@@ -17,7 +17,7 @@ import (
 
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
-	"github.com/Pacerino/pr0sauce/internal/odesli"
+	"github.com/Pacerino/pr0sauce/internal/deezer"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 )
@@ -92,7 +92,7 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		Store:      store,
 		Pr0:        client,
 		Recognizer: &recognize.Client{BaseURL: cfg.ShazamURL},
-		Linker:     odesli.New(nil, ""),
+		Linker:     deezer.New(nil, ""),
 	}, cfg, log)
 	if err != nil {
 		return err

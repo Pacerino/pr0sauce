@@ -34,6 +34,7 @@ import (
 
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
+	"github.com/Pacerino/pr0sauce/internal/deezer"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 )
@@ -263,13 +264,15 @@ func (b *Bot) process(ctx context.Context, r db.Request) (stop bool, err error) 
 	if res.Found {
 		song.Title, song.Artist, song.Album = nilIfEmpty(res.Title), nilIfEmpty(res.Artist), nilIfEmpty(res.Album)
 		song.CoverUrl = nilIfEmpty(res.CoverURL)
-		if res.AppleMusicURL != "" {
-			l, err := b.links.Links(ctx, res.AppleMusicURL)
-			if err != nil {
-				log.Warn("streaming links lookup failed, storing without links", "err", err)
-			} else {
-				song.SpotifyUrl, song.SpotifyID = nilIfEmpty(l.SpotifyURL), nilIfEmpty(l.SpotifyID)
-				song.YoutubeUrl, song.YoutubeID = nilIfEmpty(l.YouTubeURL), nilIfEmpty(l.YouTubeID)
+		song.AppleMusicUrl, song.Isrc = nilIfEmpty(res.AppleMusicURL), nilIfEmpty(res.ISRC)
+		if res.ISRC != "" {
+			u, err := b.links.DeezerURL(ctx, res.ISRC)
+			switch {
+			case err == nil:
+				song.DeezerUrl = nilIfEmpty(u)
+			case errors.Is(err, deezer.ErrNotFound):
+			default:
+				log.Warn("deezer lookup failed, storing without link", "err", err)
 			}
 		}
 		log.Info("recognized", "title", res.Title, "artist", res.Artist)
@@ -278,8 +281,8 @@ func (b *Bot) process(ctx context.Context, r db.Request) (stop bool, err error) 
 	}
 	if err := b.store.UpsertSong(ctx, db.UpsertSongParams{
 		ItemID: song.ItemID, Title: song.Title, Artist: song.Artist, Album: song.Album, Provider: song.Provider,
-		SpotifyUrl: song.SpotifyUrl, SpotifyID: song.SpotifyID, YoutubeUrl: song.YoutubeUrl, YoutubeID: song.YoutubeID,
 		CoverUrl: song.CoverUrl, RecognizedAt: song.RecognizedAt,
+		AppleMusicUrl: song.AppleMusicUrl, Isrc: song.Isrc, DeezerUrl: song.DeezerUrl,
 	}); err != nil {
 		return false, fmt.Errorf("bot: upsert song %d: %w", r.ItemID, err)
 	}

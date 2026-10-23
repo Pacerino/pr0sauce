@@ -21,7 +21,6 @@ import (
 
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
-	"github.com/Pacerino/pr0sauce/internal/odesli"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 	"github.com/Pacerino/pr0sauce/internal/testdb"
@@ -149,8 +148,8 @@ func (stubRec) Recognize(context.Context, string) (recognize.Result, error) {
 
 type stubLinker struct{}
 
-func (stubLinker) Links(context.Context, string) (odesli.Links, error) {
-	return odesli.Links{}, errors.New("unused")
+func (stubLinker) DeezerURL(context.Context, string) (string, error) {
+	return "", errors.New("unused")
 }
 
 type harness struct {

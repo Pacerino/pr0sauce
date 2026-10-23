@@ -75,3 +75,8 @@ func (c *Client) TrackURL(ctx context.Context, isrc string) (string, error) {
 	}
 	return r.Link, nil
 }
+
+// DeezerURL is TrackURL under the name the bot's Linker port uses.
+func (c *Client) DeezerURL(ctx context.Context, isrc string) (string, error) {
+	return c.TrackURL(ctx, isrc)
+}

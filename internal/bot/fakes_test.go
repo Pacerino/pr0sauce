@@ -1,11 +1,11 @@
 package bot_test
 
 import (
+	"bytes"
 	"context"
 	"sync"
 	"time"
 
-	"github.com/Pacerino/pr0sauce/internal/odesli"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 )
@@ -146,16 +146,34 @@ func (f *fakeRecognizer) Recognize(_ context.Context, url string) (recognize.Res
 
 type fakeLinker struct {
 	mu    sync.Mutex
-	links odesli.Links
+	url   string
 	err   error
 	calls []string
 }
 
-func (f *fakeLinker) Links(_ context.Context, url string) (odesli.Links, error) {
+func (f *fakeLinker) DeezerURL(_ context.Context, isrc string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.calls = append(f.calls, url)
-	return f.links, f.err
+	f.calls = append(f.calls, isrc)
+	return f.url, f.err
+}
+
+// syncBuf is a goroutine-safe log sink.
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
 }
 
 type fakeClock struct {

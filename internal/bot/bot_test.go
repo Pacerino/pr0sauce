@@ -6,13 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/Pacerino/pr0sauce/internal/bot"
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
-	"github.com/Pacerino/pr0sauce/internal/odesli"
+	"github.com/Pacerino/pr0sauce/internal/deezer"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
 	"github.com/Pacerino/pr0sauce/internal/testdb"
@@ -30,7 +31,7 @@ const (
 
 var kumite = recognize.Result{
 	Found: true, Title: "Kumite", Artist: "Paul Hertzog", Album: "Bloodsport",
-	CoverURL: "https://is1.example/cover.jpg", AppleMusicURL: "https://music.apple.com/x",
+	CoverURL: "https://is1.example/cover.jpg", AppleMusicURL: "https://music.apple.com/x", ISRC: "TCAFX2160415",
 }
 
 const kumiteComment = "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: Bloodsport\n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung 23.10.2026 um 15:15"
@@ -41,6 +42,7 @@ type env struct {
 	pr0   *fakePr0
 	rec   *fakeRecognizer
 	link  *fakeLinker
+	logs  *syncBuf
 	clock *fakeClock
 	pool  *pgxpool.Pool
 	q     *db.Queries
@@ -57,7 +59,8 @@ func setup(t *testing.T, mod func(*config.Config)) *env {
 	e := &env{
 		pr0:   newFakePr0(),
 		rec:   &fakeRecognizer{result: kumite},
-		link:  &fakeLinker{links: odesli.Links{SpotifyURL: "https://open.spotify.com/track/s1", SpotifyID: "s1", YouTubeURL: "https://youtube.com/watch?v=y1", YouTubeID: "y1"}},
+		link:  &fakeLinker{url: "https://www.deezer.com/track/1568632112"},
+		logs:  &syncBuf{},
 		clock: &fakeClock{t: testNow},
 		pool:  pool,
 		q:     db.New(pool),
@@ -65,7 +68,7 @@ func setup(t *testing.T, mod func(*config.Config)) *env {
 	e.pr0.items[itemID] = pr0gramm.Item{ID: itemID, Image: videoPath, Thumb: "2026/10/23/abc.jpg"}
 	b, err := bot.New(bot.Deps{
 		Store: bot.NewStore(e.q), Pr0: e.pr0, Recognizer: e.rec, Linker: e.link, Clock: e.clock,
-	}, cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	}, cfg, slog.New(slog.NewTextHandler(e.logs, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,8 +256,8 @@ func TestProcess_HitPostsCommentAndTags(t *testing.T) {
 	if want := []string{"https://vid.pr0gramm.com/" + videoPath}; !reflect.DeepEqual(e.rec.calls, want) {
 		t.Fatalf("recognize calls = %v; want %v", e.rec.calls, want)
 	}
-	if want := []string{kumite.AppleMusicURL}; !reflect.DeepEqual(e.link.calls, want) {
-		t.Fatalf("links calls = %v; want %v", e.link.calls, want)
+	if want := []string{kumite.ISRC}; !reflect.DeepEqual(e.link.calls, want) {
+		t.Fatalf("deezer calls = %v; want %v", e.link.calls, want)
 	}
 	if want := []post{{itemID, 11, kumiteComment}}; !reflect.DeepEqual(e.pr0.posts, want) {
 		t.Fatalf("posts = %+v\nwant  %+v", e.pr0.posts, want)
@@ -275,30 +278,84 @@ func TestProcess_HitPostsCommentAndTags(t *testing.T) {
 	}
 	if str(s.Title) != "Kumite" || str(s.Artist) != "Paul Hertzog" || str(s.Album) != "Bloodsport" ||
 		s.Provider != "shazam" || str(s.CoverUrl) != kumite.CoverURL ||
-		str(s.SpotifyUrl) != "https://open.spotify.com/track/s1" || str(s.SpotifyID) != "s1" ||
-		str(s.YoutubeUrl) != "https://youtube.com/watch?v=y1" || str(s.YoutubeID) != "y1" ||
+		str(s.DeezerUrl) != "https://www.deezer.com/track/1568632112" ||
 		!s.RecognizedAt.Equal(testNow) {
 		t.Fatalf("song = %+v", s)
 	}
 }
 
-func TestProcess_HitLinksErrorAndEmptyAlbum(t *testing.T) {
+func TestProcess_HitStoresAppleIsrcDeezer(t *testing.T) {
+	e := setup(t, nil)
+	e.goLive(t)
+	e.rec.result = recognize.Result{
+		Found: true, Title: "Kumite", Artist: "Paul Hertzog", Album: "Bloodsport",
+		AppleMusicURL: "https://music.apple.com/gb/album/x/1597617995?i=1597618301", ISRC: "TCAFX2160415",
+	}
+	e.link.url = "https://www.deezer.com/track/1568632112"
+	e.ingest(t, mention(11, itemID, "alice"))
+	e.process(t)
+	s, err := e.q.GetSong(context.Background(), itemID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if str(s.AppleMusicUrl) != "https://music.apple.com/gb/album/x/1597617995?i=1597618301" ||
+		str(s.Isrc) != "TCAFX2160415" || str(s.DeezerUrl) != "https://www.deezer.com/track/1568632112" {
+		t.Fatalf("song = %+v; want apple/isrc/deezer stored", s)
+	}
+	if s.SpotifyUrl != nil || s.SpotifyID != nil || s.YoutubeUrl != nil || s.YoutubeID != nil {
+		t.Fatalf("song = %+v; want spotify/youtube NULL", s)
+	}
+}
+
+func TestProcess_DeezerFailureStillReplies(t *testing.T) {
+	e := setup(t, nil)
+	e.goLive(t)
+	e.link.err = errors.New("deezer down")
+	e.ingest(t, mention(11, itemID, "alice"))
+	e.process(t)
+	if want := []post{{itemID, 11, kumiteComment}}; !reflect.DeepEqual(e.pr0.posts, want) {
+		t.Fatalf("posts = %+v\nwant  %+v", e.pr0.posts, want)
+	}
+	r := e.req(t, 11)
+	if r.Status != "done" || r.Attempts != 0 {
+		t.Fatalf("row = %s attempts=%d; want done/0", r.Status, r.Attempts)
+	}
+	s, err := e.q.GetSong(context.Background(), itemID)
+	if err != nil || s.DeezerUrl != nil || str(s.Title) != "Kumite" {
+		t.Fatalf("song = %+v, %v; want deezer_url NULL", s, err)
+	}
+	if logs := e.logs.String(); !strings.Contains(logs, "level=WARN") || !strings.Contains(logs, "deezer down") {
+		t.Fatalf("logs = %q; want WARN with err", logs)
+	}
+}
+
+func TestProcess_DeezerNotFoundSilent(t *testing.T) {
+	e := setup(t, nil)
+	e.goLive(t)
+	e.link.err = deezer.ErrNotFound
+	e.ingest(t, mention(11, itemID, "alice"))
+	e.process(t)
+	if len(e.pr0.posts) != 1 || e.req(t, 11).Status != "done" {
+		t.Fatalf("posts = %+v", e.pr0.posts)
+	}
+	if strings.Contains(e.logs.String(), "level=WARN") {
+		t.Fatalf("logs = %q; want no WARN", e.logs.String())
+	}
+}
+
+func TestProcess_HitWithoutISRCSkipsDeezer(t *testing.T) {
 	e := setup(t, nil)
 	e.goLive(t)
 	e.rec.result = recognize.Result{Found: true, Title: "Kumite", Artist: "Paul Hertzog", AppleMusicURL: "https://music.apple.com/x"}
-	e.link.err = errors.New("odesli down")
 	e.ingest(t, mention(11, itemID, "alice"))
 	e.process(t)
 	want := "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: \n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung " + checked
-	if len(e.pr0.posts) != 1 || e.pr0.posts[0].Text != want {
-		t.Fatalf("posts = %+v", e.pr0.posts)
+	if len(e.pr0.posts) != 1 || e.pr0.posts[0].Text != want || len(e.link.calls) != 0 {
+		t.Fatalf("posts = %+v calls = %v", e.pr0.posts, e.link.calls)
 	}
 	s, err := e.q.GetSong(context.Background(), itemID)
-	if err != nil || s.Album != nil || s.SpotifyUrl != nil || s.YoutubeID != nil || s.CoverUrl != nil {
-		t.Fatalf("song = %+v, %v; want NULL album/links/cover", s, err)
-	}
-	if r := e.req(t, 11); r.Status != "done" {
-		t.Fatalf("status = %s", r.Status)
+	if err != nil || s.Album != nil || s.Isrc != nil || s.DeezerUrl != nil || s.CoverUrl != nil {
+		t.Fatalf("song = %+v, %v", s, err)
 	}
 }
 
