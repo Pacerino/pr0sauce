@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -66,6 +67,10 @@ insert into pr0music.items (created_at, item_id, title, album, artist, url, acr_
  ('2024-02-01T10:00:00Z', 2, 'Old', '', 'X', '', '', '', '', '', '', 'shazam'),
  ('2024-02-02T10:00:00Z', 2, 'New', '', 'Y', '', '', '', '', 'https://yt/2', 'yt2', 'shazam'),
  ('2024-03-01T10:00:00Z', 3, '', '', '', '', '', '', '', '', '', 'shazam');
+insert into pr0music.items (created_at, deleted_at, item_id, title, provider) values
+ ('2024-04-01T10:00:00Z', now(), 4, 'Gone', 'shazam');
+insert into pr0music.comments (created_at, deleted_at, comment_id, up, down, content, created, item_id)
+ values ('2020-01-01T00:00:00Z', now(), 901, 0, 0, 'gone', '2024-01-01T10:00:00Z', 4);
 insert into pr0music.comments (created_at, comment_id, up, down, content, created, item_id, thumb)
  values ('2020-01-01T00:00:00Z', 900, 5, 1, 'hello', '2024-01-01T10:00:00Z', 1, 'thumb.jpg')`)
 	if err != nil {
@@ -118,4 +123,62 @@ insert into pr0music.comments (created_at, comment_id, up, down, content, create
 	if err != nil || rep2 != rep {
 		t.Fatalf("force rerun: %+v %v", rep2, err)
 	}
+}
+
+func assertEmpty(t *testing.T, dst *pgxpool.Pool) {
+	t.Helper()
+	var songs, comments int
+	if err := dst.QueryRow(context.Background(),
+		`select (select count(*) from songs), (select count(*) from bot_comments)`).Scan(&songs, &comments); err != nil {
+		t.Fatal(err)
+	}
+	if songs != 0 || comments != 0 {
+		t.Fatalf("expected rollback, got songs=%d comments=%d", songs, comments)
+	}
+}
+
+func TestImport_VoteOverflowAborts(t *testing.T) {
+	ctx := context.Background()
+	src := newSource(t)
+	dst := testdb.New(t)
+	_, err := src.Exec(ctx, `
+insert into pr0music.items (created_at, item_id, title, provider) values ('2024-01-01T10:00:00Z', 1, 'A', 'x');
+insert into pr0music.comments (created_at, comment_id, up, down, content, created, item_id)
+ values ('2020-01-01T00:00:00Z', 777, 2147483648, 0, 'c', '2024-01-01T10:00:00Z', 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = legacy.Import(ctx, src, dst, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	if err == nil || !strings.Contains(err.Error(), "777") || !strings.Contains(err.Error(), "2147483648") {
+		t.Fatalf("err = %v", err)
+	}
+	assertEmpty(t, dst)
+}
+
+func TestImport_NullTimestampAborts(t *testing.T) {
+	ctx := context.Background()
+	src := newSource(t)
+	dst := testdb.New(t)
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+
+	_, err := src.Exec(ctx, `insert into pr0music.items (created_at, item_id, title, provider) values (null, 1, 'A', 'x')`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = legacy.Import(ctx, src, dst, log, false); err == nil || !strings.Contains(err.Error(), "created_at") {
+		t.Fatalf("items: err = %v", err)
+	}
+	assertEmpty(t, dst)
+
+	_, err = src.Exec(ctx, `
+update pr0music.items set created_at = now();
+insert into pr0music.comments (created_at, comment_id, up, down, content, created, item_id)
+ values (now(), 555, 0, 0, 'c', null, 1)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = legacy.Import(ctx, src, dst, log, false); err == nil || !strings.Contains(err.Error(), "555") {
+		t.Fatalf("comments: err = %v", err)
+	}
+	assertEmpty(t, dst)
 }

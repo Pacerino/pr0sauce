@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"time"
 
 	"github.com/Pacerino/pr0sauce/internal/db"
@@ -77,10 +78,10 @@ order by item_id, (coalesce(title, '') <> '') desc, created_at desc nulls last, 
 			continue
 		}
 		first, last = false, itemID
-		recognized := time.Time{}
-		if createdAt != nil {
-			recognized = *createdAt
+		if createdAt == nil {
+			return rep, fmt.Errorf("legacy: item id %d (item_id %d) has NULL created_at", id, itemID)
 		}
+		recognized := *createdAt
 		p := db.UpsertSongParams{
 			ItemID: itemID, Title: nullIfEmpty(title), Artist: nullIfEmpty(artist), Album: nullIfEmpty(album),
 			Provider: provider, SpotifyUrl: nullIfEmpty(spURL), SpotifyID: nullIfEmpty(spID),
@@ -115,10 +116,16 @@ order by comment_id`)
 		if err := crows.Scan(&p.CommentID, &p.ItemID, &p.Content, &up, &down, &p.Thumb, &createdAt); err != nil {
 			return rep, fmt.Errorf("legacy: scan comment: %w", err)
 		}
-		p.Up, p.Down = int32(up), int32(down)
-		if createdAt != nil {
-			p.CreatedAt = *createdAt
+		if up < math.MinInt32 || up > math.MaxInt32 {
+			return rep, fmt.Errorf("legacy: comment_id %d: up=%d out of int32 range", p.CommentID, up)
 		}
+		if down < math.MinInt32 || down > math.MaxInt32 {
+			return rep, fmt.Errorf("legacy: comment_id %d: down=%d out of int32 range", p.CommentID, down)
+		}
+		if createdAt == nil {
+			return rep, fmt.Errorf("legacy: comment_id %d has NULL created", p.CommentID)
+		}
+		p.Up, p.Down, p.CreatedAt = int32(up), int32(down), *createdAt
 		if err := q.UpsertBotComment(ctx, p); err != nil {
 			return rep, fmt.Errorf("legacy: upsert comment %d: %w", p.CommentID, err)
 		}
