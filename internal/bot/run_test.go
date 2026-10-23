@@ -601,3 +601,21 @@ func insertDue(s Store) error {
 	})
 	return err
 }
+
+func TestRun_CloudflareThenLoggedOutDeferredLoginSucceeds(t *testing.T) {
+	h := newHarness(t, func(r *runner) { r.boMin, r.boMax = 20*time.Millisecond, 20*time.Millisecond })
+	h.srv.set(func() { h.srv.cloudflare, h.srv.loginOK = true, true }) // login sets a good cookie
+	h.start(t)
+	h.waitHealth(t, http.StatusServiceUnavailable, "unknown")
+
+	h.srv.set(func() { h.srv.cloudflare = false }) // identifier: JSON 403 without cookie, 200 with it
+	h.waitHealth(t, http.StatusOK, "ok")           // recheck interval is 1h, so no waiting for it
+	if n := h.srv.logins.Load(); n != 1 {
+		t.Errorf("logins = %d, want exactly 1", n)
+	}
+	waitFor(t, "polling to resume", func() bool { return h.srv.inbox.Load() > 0 })
+	v, err := h.store.GetState(context.Background(), sessionCookiesKey)
+	if err != nil || !strings.Contains(v, "good") {
+		t.Errorf("persisted cookies = %q, %v", v, err)
+	}
+}

@@ -190,6 +190,7 @@ func (r *runner) loginOnce(ctx context.Context) {
 	if err := r.persistCookies(ctx); err != nil {
 		r.log.Error("persisting session cookies failed", "err", err)
 	}
+	r.checked = nil // the cached pre-login result is stale; really re-verify
 	valid, err := r.checkSession(ctx)
 	switch {
 	case err != nil:
