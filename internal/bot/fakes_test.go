@@ -40,6 +40,10 @@ type fakePr0 struct {
 	pms       []pm
 	tags      []tagCall
 	markReads []int64 // successful MarkRead calls only
+
+	// userComments answers UserComments; afters records every call's after.
+	userComments func(after time.Time) (pr0gramm.UserComments, error)
+	afters       []time.Time
 }
 
 func newFakePr0() *fakePr0 { return &fakePr0{items: map[int64]pr0gramm.Item{}} }
@@ -92,7 +96,13 @@ func (f *fakePr0) SendMessage(_ context.Context, recipient, text string) error {
 	return nil
 }
 
-func (f *fakePr0) UserComments(context.Context, string, time.Time) (pr0gramm.UserComments, error) {
+func (f *fakePr0) UserComments(_ context.Context, _ string, after time.Time) (pr0gramm.UserComments, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.afters = append(f.afters, after)
+	if f.userComments != nil {
+		return f.userComments(after)
+	}
 	return pr0gramm.UserComments{}, nil
 }
 

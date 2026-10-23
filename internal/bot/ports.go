@@ -47,6 +47,8 @@ type Store interface {
 	SetMarkedRead(ctx context.Context, id int64) error
 	GetState(ctx context.Context, key string) (string, error)
 	SetState(ctx context.Context, arg db.SetStateParams) error
+	LatestBotCommentTime(ctx context.Context) (*time.Time, error)
+	UpsertBotComment(ctx context.Context, arg db.UpsertBotCommentParams) error
 }
 
 // Clock supplies the current time.
