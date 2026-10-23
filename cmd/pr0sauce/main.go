@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/Pacerino/pr0sauce/internal/bot"
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
 	"github.com/Pacerino/pr0sauce/internal/legacy"
@@ -95,6 +96,32 @@ func runImportLegacy(ctx context.Context, args []string) error {
 	return nil
 }
 
-func runBot(context.Context, []string) error      { return errNotImplemented }
-func runBotLogin(context.Context, []string) error { return errNotImplemented }
-func runAPI(context.Context, []string) error      { return errNotImplemented }
+func runBot(ctx context.Context, _ []string) error {
+	cfg, err := loadBotConfig()
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	return bot.Run(ctx, cfg, log)
+}
+
+func runBotLogin(ctx context.Context, _ []string) error {
+	cfg, err := loadBotConfig()
+	if err != nil {
+		return err
+	}
+	return bot.LoginInteractive(ctx, cfg, os.Stdin, os.Stdout)
+}
+
+func loadBotConfig() (config.Config, error) {
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return config.Config{}, err
+	}
+	if err := cfg.RequireBot(); err != nil {
+		return config.Config{}, err
+	}
+	return cfg, nil
+}
+
+func runAPI(context.Context, []string) error { return errNotImplemented }
