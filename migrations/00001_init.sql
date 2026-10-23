@@ -12,8 +12,9 @@ create table songs (
   cover_url     text,
   recognized_at timestamptz not null
 );
-create index songs_recognized_at on songs (recognized_at desc);
-create index songs_search_trgm on songs using gin ((coalesce(title,'') || ' ' || coalesce(artist,'')) gin_trgm_ops);
+create index songs_recognized_at on songs (recognized_at desc, item_id desc) where title is not null;
+create index songs_title_trgm on songs using gin (title gin_trgm_ops);
+create index songs_artist_trgm on songs using gin (artist gin_trgm_ops);
 
 create table requests (
   id             bigserial primary key,

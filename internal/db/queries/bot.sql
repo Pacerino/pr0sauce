@@ -6,7 +6,12 @@ on conflict (comment_id) do update set
   down = excluded.down, thumb = excluded.thumb, created_at = excluded.created_at;
 
 -- name: LatestBotCommentTime :one
-select max(created_at)::timestamptz as latest from bot_comments;
+-- Null when the table is empty.
+select b.created_at as latest
+from (select 1) as one
+left join bot_comments as b on true
+order by b.created_at desc nulls last
+limit 1;
 
 -- name: GetBotCommentForItem :one
 select * from bot_comments where item_id = $1 order by created_at desc, comment_id desc limit 1;

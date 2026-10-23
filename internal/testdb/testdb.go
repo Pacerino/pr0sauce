@@ -9,6 +9,7 @@ import (
 
 	"github.com/Pacerino/pr0sauce/internal/db"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pressly/goose/v3"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -17,6 +18,7 @@ import (
 const image = "postgres:18"
 
 var (
+	mu      sync.Mutex
 	once    sync.Once
 	pool    *pgxpool.Pool
 	initErr error
@@ -24,11 +26,17 @@ var (
 
 // New returns a pool on a migrated Postgres container shared by the whole test
 // package (started once, reaped by testcontainers' ryuk). All tables are
-// truncated at the start of every test, so tests must not run in parallel.
+// truncated at the start of every test; a mutex held until the test's cleanup
+// serialises tests, so t.Parallel() cannot race the truncate.
 func New(t *testing.T) *pgxpool.Pool {
 	t.Helper()
+	mu.Lock() // serialise tests sharing the DB; released on cleanup
+	t.Cleanup(mu.Unlock)
 	ctx := context.Background()
-	once.Do(func() { pool, initErr = start(ctx) })
+	once.Do(func() {
+		goose.SetLogger(goose.NopLogger())
+		pool, initErr = start(ctx)
+	})
 	if initErr != nil {
 		t.Fatalf("testdb: %v", initErr)
 	}

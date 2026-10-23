@@ -8,6 +8,8 @@ package db
 import (
 	"context"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const countHits = `-- name: CountHits :one
@@ -76,7 +78,7 @@ func (q *Queries) ProviderShare(ctx context.Context) ([]ProviderShareRow, error)
 }
 
 const songsPerWeek = `-- name: SongsPerWeek :many
-select date_trunc('week', recognized_at)::timestamptz as week, count(*)::bigint as songs
+select date_trunc('week', recognized_at at time zone 'Europe/Berlin')::date as week, count(*)::bigint as songs
 from songs
 where recognized_at >= $1
 group by 1
@@ -84,7 +86,7 @@ order by 1
 `
 
 type SongsPerWeekRow struct {
-	Week  time.Time
+	Week  pgtype.Date
 	Songs int64
 }
 

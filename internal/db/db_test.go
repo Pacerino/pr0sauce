@@ -3,6 +3,7 @@ package db_test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -70,8 +71,6 @@ func TestMigrate_UpAndDown(t *testing.T) {
 		}
 	}
 }
-
-var _ = db.Open
 
 func ptr[T any](v T) *T { return &v }
 
@@ -192,8 +191,8 @@ func TestRequestLifecycle(t *testing.T) {
 	if err != nil || len(due) != 2 || due[0].ID > due[1].ID {
 		t.Fatalf("due = %+v, %v", due, err)
 	}
-	if err := q.MarkReplying(ctx, due[0].ID); err != nil {
-		t.Fatal(err)
+	if n, err := q.MarkReplying(ctx, due[0].ID); err != nil || n != 1 {
+		t.Fatalf("MarkReplying = %d, %v; want 1", n, err)
 	}
 	stale, err := q.FailStaleReplying(ctx)
 	if err != nil || len(stale) != 1 || stale[0].Status != "failed" || *stale[0].LastError != "reply state unknown after restart" {
@@ -209,11 +208,143 @@ func TestRequestLifecycle(t *testing.T) {
 	if unread, _ = q.UnreadHandledRequests(ctx); len(unread) != 0 {
 		t.Fatalf("unread after mark = %+v", unread)
 	}
-	if err := q.SetRequestStatus(ctx, db.SetRequestStatusParams{ID: due[1].ID, Status: "done", ReplyKind: ptr("comment")}); err != nil {
-		t.Fatal(err)
+	if n, err := q.SetRequestStatus(ctx, db.SetRequestStatusParams{ID: due[1].ID, Status: "done", ReplyKind: ptr("comment")}); err != nil || n != 1 {
+		t.Fatalf("set status = %d, %v; want 1", n, err)
+	}
+	// a done row must not be resurrected by either guard
+	if n, err := q.SetRequestStatus(ctx, db.SetRequestStatusParams{ID: due[1].ID, Status: "pending"}); err != nil || n != 0 {
+		t.Fatalf("SetRequestStatus on done = %d, %v; want 0", n, err)
+	}
+	if n, err := q.BumpAttempt(ctx, db.BumpAttemptParams{ID: due[1].ID, NextAttemptAt: now}); err != nil || n != 0 {
+		t.Fatalf("BumpAttempt on done = %d, %v; want 0", n, err)
+	}
+	var st string
+	var attempts int
+	if err := pool.QueryRow(ctx, `select status, attempts from requests where id = $1`, due[1].ID).Scan(&st, &attempts); err != nil || st != "done" || attempts != 0 {
+		t.Fatalf("row = %s/%d, %v; want done/0", st, attempts, err)
 	}
 	reqs, err := q.TopRequesters(ctx, 5)
 	if err != nil || len(reqs) != 1 || reqs[0].Requests != 1 {
 		t.Fatalf("top requesters = %+v, %v", reqs, err)
+	}
+}
+
+func TestMarkReplying_OnlyFromPending(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	now := time.Now()
+	ids := map[string]int64{}
+	for i, st := range []string{"pending", "replying", "done", "failed", "skipped"} {
+		if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: int64(i + 1), ItemID: 1, Requester: "bob", MentionedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		var id int64
+		if err := pool.QueryRow(ctx, `update requests set status = $1 where message_id = $2 returning id`, st, i+1).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids[st] = id
+	}
+	for _, st := range []string{"replying", "done", "failed", "skipped"} {
+		n, err := q.MarkReplying(ctx, ids[st])
+		if err != nil || n != 0 {
+			t.Fatalf("MarkReplying(%s) = %d, %v; want 0", st, n, err)
+		}
+		var got string
+		if err := pool.QueryRow(ctx, `select status from requests where id = $1`, ids[st]).Scan(&got); err != nil || got != st {
+			t.Fatalf("%s row became %q, %v", st, got, err)
+		}
+	}
+	if n, err := q.MarkReplying(ctx, ids["pending"]); err != nil || n != 1 {
+		t.Fatalf("MarkReplying(pending) = %d, %v; want 1", n, err)
+	}
+}
+
+func TestSearchSongs_UsesIndexes(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	// Seed outside the explain tx and vacuum: unflushed GIN pending lists inflate
+	// the planner's index cost and would hide the trigram indexes.
+	if _, err := pool.Exec(ctx, `insert into songs (item_id, title, artist, provider, recognized_at)
+select i, md5(i::text), md5((i*7)::text), 'shazam', now() - (i || ' minutes')::interval from generate_series(1, 20000) i`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `vacuum analyze songs`); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `set local enable_seqscan = off`); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := tx.Query(ctx, `explain select * from songs
+where title is not null and (title ilike '%sandstorm%' escape '\' or artist ilike '%sandstorm%' escape '\')
+order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), 'sandstorm') desc, recognized_at desc limit 10`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan strings.Builder
+	for rows.Next() {
+		var l string
+		if err := rows.Scan(&l); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(l + "\n")
+	}
+	rows.Close()
+	if !strings.Contains(plan.String(), "Bitmap Index Scan on songs_title_trgm") {
+		t.Fatalf("plan does not use songs_title_trgm:\n%s", plan.String())
+	}
+}
+
+func TestSongsPerWeek_BerlinBuckets(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	at := time.Date(2026, 10, 18, 22, 30, 0, 0, time.UTC) // Sunday UTC, Monday 00:30 CEST
+	if err := q.UpsertSong(ctx, hit(1, "t", "a", at)); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := q.SongsPerWeek(ctx, at.Add(-30*24*time.Hour))
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("rows = %+v, %v", rows, err)
+	}
+	if got := rows[0].Week.Time.Format("2006-01-02"); got != "2026-10-19" {
+		t.Fatalf("week = %s; want 2026-10-19", got)
+	}
+}
+
+func TestListRecentSongs_KeysetTies(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	at := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	for i := int64(1); i <= 3; i++ {
+		if err := q.UpsertSong(ctx, hit(i, "t", "a", at)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p1, err := q.ListRecentSongs(ctx, db.ListRecentSongsParams{BeforeRecognizedAt: at.Add(time.Hour), BeforeItemID: 1 << 62, Lim: 2})
+	if err != nil || len(p1) != 2 {
+		t.Fatalf("p1 = %+v, %v", p1, err)
+	}
+	last := p1[1]
+	p2, err := q.ListRecentSongs(ctx, db.ListRecentSongsParams{BeforeRecognizedAt: last.RecognizedAt, BeforeItemID: last.ItemID, Lim: 2})
+	if err != nil || len(p2) != 1 {
+		t.Fatalf("p2 = %+v, %v", p2, err)
+	}
+	if fmt.Sprint(p1[0].ItemID, p1[1].ItemID, p2[0].ItemID) != "3 2 1" {
+		t.Fatalf("order = %d %d %d; want 3 2 1", p1[0].ItemID, p1[1].ItemID, p2[0].ItemID)
+	}
+}
+
+func TestLatestBotCommentTime_Empty(t *testing.T) {
+	q := db.New(testdb.New(t))
+	got, err := q.LatestBotCommentTime(context.Background())
+	if err != nil || got != nil {
+		t.Fatalf("got %v, %v; want nil", got, err)
 	}
 }

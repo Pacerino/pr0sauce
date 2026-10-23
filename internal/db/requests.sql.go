@@ -10,10 +10,10 @@ import (
 	"time"
 )
 
-const bumpAttempt = `-- name: BumpAttempt :exec
+const bumpAttempt = `-- name: BumpAttempt :execrows
 update requests
-set attempts = attempts + 1, next_attempt_at = $2, last_error = $3, status = 'pending', updated_at = now()
-where id = $1
+set attempts = attempts + 1, next_attempt_at = $2, last_error = $3, updated_at = now()
+where id = $1 and status = 'pending'
 `
 
 type BumpAttemptParams struct {
@@ -22,9 +22,12 @@ type BumpAttemptParams struct {
 	LastError     *string
 }
 
-func (q *Queries) BumpAttempt(ctx context.Context, arg BumpAttemptParams) error {
-	_, err := q.db.Exec(ctx, bumpAttempt, arg.ID, arg.NextAttemptAt, arg.LastError)
-	return err
+func (q *Queries) BumpAttempt(ctx context.Context, arg BumpAttemptParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpAttempt, arg.ID, arg.NextAttemptAt, arg.LastError)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const dueRequests = `-- name: DueRequests :many
@@ -148,13 +151,17 @@ func (q *Queries) InsertRequestIgnore(ctx context.Context, arg InsertRequestIgno
 	return inserted, err
 }
 
-const markReplying = `-- name: MarkReplying :exec
-update requests set status = 'replying', updated_at = now() where id = $1
+const markReplying = `-- name: MarkReplying :execrows
+update requests set status = 'replying', updated_at = now() where id = $1 and status = 'pending'
 `
 
-func (q *Queries) MarkReplying(ctx context.Context, id int64) error {
-	_, err := q.db.Exec(ctx, markReplying, id)
-	return err
+// Claims a request; 0 rows affected means someone else already moved it.
+func (q *Queries) MarkReplying(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, markReplying, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setMarkedRead = `-- name: SetMarkedRead :exec
@@ -166,10 +173,10 @@ func (q *Queries) SetMarkedRead(ctx context.Context, id int64) error {
 	return err
 }
 
-const setRequestStatus = `-- name: SetRequestStatus :exec
+const setRequestStatus = `-- name: SetRequestStatus :execrows
 update requests
 set status = $2, reply_kind = $3, last_error = $4, updated_at = now()
-where id = $1
+where id = $1 and status in ('pending', 'replying')
 `
 
 type SetRequestStatusParams struct {
@@ -179,14 +186,18 @@ type SetRequestStatusParams struct {
 	LastError *string
 }
 
-func (q *Queries) SetRequestStatus(ctx context.Context, arg SetRequestStatusParams) error {
-	_, err := q.db.Exec(ctx, setRequestStatus,
+// Only live (pending/replying) rows may change status; terminal rows are never resurrected.
+func (q *Queries) SetRequestStatus(ctx context.Context, arg SetRequestStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setRequestStatus,
 		arg.ID,
 		arg.Status,
 		arg.ReplyKind,
 		arg.LastError,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const unreadHandledRequests = `-- name: UnreadHandledRequests :many

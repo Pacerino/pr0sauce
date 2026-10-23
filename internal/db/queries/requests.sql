@@ -14,18 +14,20 @@ where status = 'pending' and next_attempt_at <= sqlc.arg(now)::timestamptz
 order by id
 limit sqlc.arg(lim)::int;
 
--- name: SetRequestStatus :exec
+-- name: SetRequestStatus :execrows
+-- Only live (pending/replying) rows may change status; terminal rows are never resurrected.
 update requests
 set status = $2, reply_kind = $3, last_error = $4, updated_at = now()
-where id = $1;
+where id = $1 and status in ('pending', 'replying');
 
--- name: BumpAttempt :exec
+-- name: BumpAttempt :execrows
 update requests
-set attempts = attempts + 1, next_attempt_at = $2, last_error = $3, status = 'pending', updated_at = now()
-where id = $1;
+set attempts = attempts + 1, next_attempt_at = $2, last_error = $3, updated_at = now()
+where id = $1 and status = 'pending';
 
--- name: MarkReplying :exec
-update requests set status = 'replying', updated_at = now() where id = $1;
+-- name: MarkReplying :execrows
+-- Claims a request; 0 rows affected means someone else already moved it.
+update requests set status = 'replying', updated_at = now() where id = $1 and status = 'pending';
 
 -- name: FailStaleReplying :many
 update requests

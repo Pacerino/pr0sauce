@@ -14,7 +14,7 @@ group by provider
 order by hits desc, provider;
 
 -- name: SongsPerWeek :many
-select date_trunc('week', recognized_at)::timestamptz as week, count(*)::bigint as songs
+select date_trunc('week', recognized_at at time zone 'Europe/Berlin')::date as week, count(*)::bigint as songs
 from songs
 where recognized_at >= $1
 group by 1

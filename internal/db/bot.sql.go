@@ -41,12 +41,17 @@ func (q *Queries) GetState(ctx context.Context, key string) (string, error) {
 }
 
 const latestBotCommentTime = `-- name: LatestBotCommentTime :one
-select max(created_at)::timestamptz as latest from bot_comments
+select b.created_at as latest
+from (select 1) as one
+left join bot_comments as b on true
+order by b.created_at desc nulls last
+limit 1
 `
 
-func (q *Queries) LatestBotCommentTime(ctx context.Context) (time.Time, error) {
+// Null when the table is empty.
+func (q *Queries) LatestBotCommentTime(ctx context.Context) (*time.Time, error) {
 	row := q.db.QueryRow(ctx, latestBotCommentTime)
-	var latest time.Time
+	var latest *time.Time
 	err := row.Scan(&latest)
 	return latest, err
 }
