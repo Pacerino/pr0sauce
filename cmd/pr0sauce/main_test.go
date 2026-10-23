@@ -16,7 +16,7 @@ func TestRunExitCodes(t *testing.T) {
 	}{
 		{"no args", nil, 2, "usage:"},
 		{"unknown", []string{"nope"}, 2, "usage:"},
-		{"stub error", []string{"migrate"}, 1, "not implemented"},
+		{"stub error", []string{"api"}, 1, "not implemented"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -5,7 +5,7 @@ test:
 	go test ./...
 
 generate:
-	sqlc generate
+	go tool sqlc generate
 
 lint:
 	go vet ./...

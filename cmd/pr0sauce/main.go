@@ -8,6 +8,9 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	"github.com/Pacerino/pr0sauce/internal/config"
+	"github.com/Pacerino/pr0sauce/internal/db"
 )
 
 const usage = "usage: pr0sauce <migrate|import-legacy|bot|bot-login|api>\n"
@@ -47,7 +50,14 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 
 var errNotImplemented = errors.New("not implemented")
 
-func runMigrate(ctx context.Context) error      { return errNotImplemented }
+func runMigrate(ctx context.Context) error {
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return err
+	}
+	return db.Migrate(ctx, cfg.DatabaseURL)
+}
+
 func runImportLegacy(ctx context.Context) error { return errNotImplemented }
 func runBot(ctx context.Context) error          { return errNotImplemented }
 func runBotLogin(ctx context.Context) error     { return errNotImplemented }
