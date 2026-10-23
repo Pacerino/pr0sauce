@@ -3,6 +3,7 @@
 node_modules/
 .next/
 .env
+web.env
 __pycache__/
 .venv/
 web/node_modules/

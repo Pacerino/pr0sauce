@@ -63,6 +63,8 @@ services:
     <<: *go
     command: ["api"]
     restart: unless-stopped
+    environment:
+      BOT_HEALTH_URL: http://bot:8081/healthz
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -76,6 +78,8 @@ services:
   web:
     image: ghcr.io/pacerino/pr0sauce-web:${TAG:?set TAG in deploy/.env}
     restart: unless-stopped
+    # web.env only (OAuth secret must not reach the Go containers)
+    env_file: web.env
     environment:
       API_URL: http://api:8080
     depends_on:
