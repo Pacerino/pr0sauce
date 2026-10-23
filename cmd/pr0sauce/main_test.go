@@ -16,10 +16,11 @@ func TestRunExitCodes(t *testing.T) {
 	}{
 		{"no args", nil, 2, "usage:"},
 		{"unknown", []string{"nope"}, 2, "usage:"},
-		{"stub error", []string{"api"}, 1, "not implemented"},
+		{"api without config", []string{"api"}, 1, "DATABASE_URL is required"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("DATABASE_URL", "")
 			var buf bytes.Buffer
 			if got := run(context.Background(), tt.args, &buf); got != tt.code {
 				t.Fatalf("exit = %d, want %d", got, tt.code)

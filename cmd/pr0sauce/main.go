@@ -2,15 +2,17 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/Pacerino/pr0sauce/internal/api"
 	"github.com/Pacerino/pr0sauce/internal/bot"
 	"github.com/Pacerino/pr0sauce/internal/config"
 	"github.com/Pacerino/pr0sauce/internal/db"
@@ -51,8 +53,6 @@ func run(ctx context.Context, args []string, stderr io.Writer) int {
 	}
 	return 0
 }
-
-var errNotImplemented = errors.New("not implemented")
 
 func runMigrate(ctx context.Context, _ []string) error {
 	cfg, err := config.Load(os.Getenv)
@@ -124,4 +124,36 @@ func loadBotConfig() (config.Config, error) {
 	return cfg, nil
 }
 
-func runAPI(context.Context, []string) error { return errNotImplemented }
+func runAPI(ctx context.Context, _ []string) error {
+	cfg, err := config.Load(os.Getenv)
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	pool, err := db.Open(ctx, cfg.DatabaseURL)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	srv := &http.Server{
+		Addr:              cfg.APIAddr,
+		Handler:           api.New(db.New(pool), pool, log),
+		ReadHeaderTimeout: 5 * time.Second,
+		WriteTimeout:      15 * time.Second,
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- srv.ListenAndServe() }()
+	log.Info("api listening", "addr", cfg.APIAddr)
+	select {
+	case err := <-errc:
+		return err
+	case <-ctx.Done():
+	}
+	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		return err
+	}
+	log.Info("api stopped")
+	return nil
+}
