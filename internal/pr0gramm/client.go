@@ -112,12 +112,17 @@ func (c *Client) call(ctx context.Context, method, path string, query, form url.
 }
 
 func (c *Client) post(ctx context.Context, path string, form url.Values) error {
+	return c.postQuery(ctx, path, nil, form)
+}
+
+// postQuery is post with query parameters in the URL next to the form nonce.
+func (c *Client) postQuery(ctx context.Context, path string, query, form url.Values) error {
 	n, err := c.nonce()
 	if err != nil {
 		return err
 	}
 	form.Set("_nonce", n)
-	return c.call(ctx, http.MethodPost, path, nil, form, nil)
+	return c.call(ctx, http.MethodPost, path, query, form, nil)
 }
 
 func newAPIError(path string, status int, body []byte) *APIError {
@@ -258,10 +263,10 @@ func (c *Client) InboxComments(ctx context.Context) ([]InboxComment, error) {
 	return out, nil
 }
 
-// MarkRead marks one comment message as read.
+// MarkRead marks one comment message as read. The API doc lists GET, but production requires POST with the query params and a form nonce (verified 2026-10-23).
 func (c *Client) MarkRead(ctx context.Context, messageID int64) error {
 	q := url.Values{"messageType": {"comment"}, "messageId": {strconv.FormatInt(messageID, 10)}}
-	return c.call(ctx, http.MethodGet, "/inbox/read", q, nil, nil)
+	return c.postQuery(ctx, "/inbox/read", q, url.Values{})
 }
 
 // PostComment posts a comment; parentID 0 means top level.

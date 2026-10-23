@@ -309,17 +309,52 @@ func TestAddTagsMarkReadSendMessage(t *testing.T) {
 	if err := c.SendMessage(ctx, "bob", "yo"); err != nil {
 		t.Fatal(err)
 	}
-	if err := c.MarkRead(ctx, 8); err != nil {
-		t.Fatal(err)
-	}
 	if forms[0].Get("tags") != "a,b" || forms[0].Get("itemId") != "3" || forms[0].Get("_nonce") != "0123456789abcdef" {
 		t.Fatalf("tags form %v", forms[0])
 	}
 	if forms[1].Get("recipientName") != "bob" || forms[1].Get("comment") != "yo" || forms[1].Get("_nonce") != "0123456789abcdef" {
 		t.Fatalf("msg form %v", forms[1])
 	}
-	if got[2] != "GET /inbox/read?messageId=8&messageType=comment" {
-		t.Fatalf("markread %q", got[2])
+	_ = got
+}
+
+func TestMarkRead_PostsQueryWithFormNonce(t *testing.T) {
+	var method, path string
+	var query url.Values
+	var form url.Values
+	calls := 0
+	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		r.ParseForm()
+		method, path, query, form = r.Method, r.URL.Path, r.URL.Query(), r.PostForm
+		w.Write([]byte(`{"ts":1}`))
+	})
+	setMe(t, c, srv)
+	if err := c.MarkRead(context.Background(), 123); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 || method != http.MethodPost || path != "/inbox/read" {
+		t.Fatalf("calls=%d method=%q path=%q", calls, method, path)
+	}
+	if query.Get("messageType") != "comment" || query.Get("messageId") != "123" {
+		t.Fatalf("query %v", query)
+	}
+	if form.Get("_nonce") != "0123456789abcdef" {
+		t.Fatalf("form %v", form)
+	}
+	if _, ok := form["messageType"]; ok {
+		t.Fatalf("messageType leaked into form: %v", form)
+	}
+}
+
+func TestMarkRead_NoSessionSendsNothing(t *testing.T) {
+	calls := 0
+	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { calls++ })
+	if err := c.MarkRead(context.Background(), 123); !errors.Is(err, ErrNoSession) {
+		t.Fatalf("err=%v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("calls=%d", calls)
 	}
 }
 
