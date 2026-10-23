@@ -28,8 +28,10 @@ update songs set
   corrected_at = now()
 where item_id = $1;
 
--- name: RestoreSnapshot :exec
+-- name: RestoreSnapshot :execrows
 -- Writes every column back from a SongSnapshot jsonb, corrected_at included.
+-- EVERY songs column must be listed below (TestRestoreSnapshot_CoversAllColumns
+-- fails otherwise). The snapshot must belong to the target item; 0 rows = mismatch.
 update songs s set
   title = r.title, artist = r.artist, album = r.album, provider = r.provider,
   spotify_url = r.spotify_url, spotify_id = r.spotify_id,
@@ -38,7 +40,7 @@ update songs s set
   apple_music_url = r.apple_music_url, isrc = r.isrc, deezer_url = r.deezer_url,
   corrected_at = r.corrected_at
 from jsonb_populate_record(null::songs, sqlc.arg(snapshot)::jsonb) r
-where s.item_id = $1;
+where s.item_id = $1 and r.item_id = $1;
 
 -- name: ListRecentSongs :many
 -- Hits only, newest first. Keyset: rows strictly older than (before_recognized_at, before_item_id).

@@ -28,8 +28,9 @@ limit sqlc.arg(lim)::int offset sqlc.arg(off)::int;
 -- name: CountUserSuggestionsSince :one
 select count(*) from suggestions where user_id = $1 and created_at >= $2;
 
--- name: SetSuggestionStatus :exec
-update suggestions set status = $2, reviewer_id = $3, reason = $4, decided_at = now() where id = $1;
+-- name: SetSuggestionStatus :execrows
+-- Only open suggestions can be decided; 0 rows means it was already decided.
+update suggestions set status = $2, reviewer_id = $3, reason = $4, decided_at = now() where id = $1 and status = 'open';
 
 -- name: SupersedeOthers :exec
 update suggestions set status = 'superseded', decided_at = now()
@@ -73,8 +74,14 @@ select * from requests where status = 'failed' order by updated_at desc, id desc
 limit sqlc.arg(lim)::int offset sqlc.arg(off)::int;
 
 -- name: PendingRetryStats :one
-select count(*)::bigint as pending, coalesce(max(attempts), 0)::int as max_attempts, min(next_attempt_at)::timestamptz as next_attempt_at
-from requests where status = 'pending' and attempts > 0;
+-- next_attempt_at comes through a left join so it stays nullable (NULL when nothing is pending-retry).
+select (select count(*) from requests where status = 'pending' and attempts > 0)::bigint as pending,
+  (select coalesce(max(attempts), 0) from requests where status = 'pending' and attempts > 0)::int as max_attempts,
+  n.next_attempt_at
+from (select 1) d
+left join requests n on n.id = (select id from requests where status = 'pending' and attempts > 0 order by next_attempt_at, id limit 1);
 
 -- name: LastDoneAt :one
-select max(updated_at)::timestamptz as last_done_at from requests where status = 'done';
+select l.updated_at as last_done_at
+from (select 1) d
+left join requests l on l.id = (select id from requests where status = 'done' order by updated_at desc, id desc limit 1);

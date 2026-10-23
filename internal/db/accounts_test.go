@@ -2,6 +2,9 @@ package db_test
 
 import (
 	"context"
+	"os"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -107,7 +110,7 @@ func TestOneOpenSuggestionPerUserItem(t *testing.T) {
 	if _, err := mkSuggestion(q, 1, u.ID, "two"); err == nil {
 		t.Fatal("second open suggestion succeeded; want unique violation")
 	}
-	if err := q.SetSuggestionStatus(ctx, db.SetSuggestionStatusParams{ID: first.ID, Status: "rejected", ReviewerID: &u.ID}); err != nil {
+	if _, err := q.SetSuggestionStatus(ctx, db.SetSuggestionStatusParams{ID: first.ID, Status: "rejected", ReviewerID: &u.ID}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := mkSuggestion(q, 1, u.ID, "two"); err != nil {
@@ -192,7 +195,7 @@ func TestSnapshotRestore_RoundTrip(t *testing.T) {
 	if err := q.ApplyCorrection(ctx, db.ApplyCorrectionParams{ItemID: 1, Title: ptr("Fixed"), Artist: ptr("B"), Provider: "community"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := q.RestoreSnapshot(ctx, db.RestoreSnapshotParams{ItemID: 1, Snapshot: snap}); err != nil {
+	if _, err := q.RestoreSnapshot(ctx, db.RestoreSnapshotParams{ItemID: 1, Snapshot: snap}); err != nil {
 		t.Fatal(err)
 	}
 	s, err := q.GetSong(ctx, 1)
@@ -208,5 +211,137 @@ func TestSnapshotRestore_RoundTrip(t *testing.T) {
 	}
 	if _, err := q.LockSong(ctx, 1); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPendingRetryStats_Empty(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	st, err := q.PendingRetryStats(ctx)
+	if err != nil || st.NextAttemptAt != nil || st.Pending != 0 {
+		t.Fatalf("empty stats = %+v, %v; want nil next, 0 pending", st, err)
+	}
+	now := time.Now().Truncate(time.Microsecond)
+	if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: 1, ItemID: 1, Requester: "b", MentionedAt: now, Status: "pending", NextAttemptAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	due := now.Add(time.Hour)
+	if _, err := pool.Exec(ctx, `update requests set attempts = 3, next_attempt_at = $1`, due); err != nil {
+		t.Fatal(err)
+	}
+	st, err = q.PendingRetryStats(ctx)
+	if err != nil || st.Pending != 1 || st.MaxAttempts != 3 || st.NextAttemptAt == nil || !st.NextAttemptAt.Equal(due) {
+		t.Fatalf("stats = %+v, %v", st, err)
+	}
+}
+
+func TestLastDoneAt_Empty(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	got, err := q.LastDoneAt(ctx)
+	if err != nil || got != nil {
+		t.Fatalf("empty LastDoneAt = %v, %v; want nil", got, err)
+	}
+	now := time.Now()
+	if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: 1, ItemID: 1, Requester: "b", MentionedAt: now, Status: "done", NextAttemptAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = q.LastDoneAt(ctx)
+	if err != nil || got == nil {
+		t.Fatalf("LastDoneAt = %v, %v; want non-nil", got, err)
+	}
+}
+
+func TestRestoreSnapshot_RejectsForeignItem(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	for i, ti := range []string{"One", "Two"} {
+		if err := q.UpsertSong(ctx, hit(int64(i+1), ti, "A", time.Now())); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snap, err := q.SongSnapshot(ctx, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n, err := q.RestoreSnapshot(ctx, db.RestoreSnapshotParams{ItemID: 2, Snapshot: snap})
+	if err != nil || n != 0 {
+		t.Fatalf("foreign restore = %d, %v; want 0 rows", n, err)
+	}
+	if s, _ := q.GetSong(ctx, 2); *s.Title != "Two" {
+		t.Fatalf("item 2 overwritten: %s", *s.Title)
+	}
+	if n, err := q.RestoreSnapshot(ctx, db.RestoreSnapshotParams{ItemID: 1, Snapshot: snap}); err != nil || n != 1 {
+		t.Fatalf("own restore = %d, %v; want 1", n, err)
+	}
+}
+
+func TestSetSuggestionStatus_OnlyFromOpen(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	if err := q.UpsertSong(ctx, hit(1, "T", "A", time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	u, u2 := mkUser(t, q, 1, "a"), mkUser(t, q, 2, "b")
+	s, err := mkSuggestion(q, 1, u.ID, "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := mkSuggestion(q, 1, u2.ID, "y")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := q.SetSuggestionStatus(ctx, db.SetSuggestionStatusParams{ID: s.ID, Status: "approved", ReviewerID: &u.ID}); err != nil || n != 1 {
+		t.Fatalf("first decide = %d, %v; want 1", n, err)
+	}
+	if n, err := q.SetSuggestionStatus(ctx, db.SetSuggestionStatusParams{ID: s.ID, Status: "rejected", ReviewerID: &u.ID}); err != nil || n != 0 {
+		t.Fatalf("second decide = %d, %v; want 0", n, err)
+	}
+	if err := q.SupersedeOthers(ctx, db.SupersedeOthersParams{ItemID: 1, ID: other.ID}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := q.GetSuggestion(ctx, s.ID)
+	if got.Status != "approved" {
+		t.Fatalf("approved suggestion changed to %s by SupersedeOthers", got.Status)
+	}
+}
+
+func TestRestoreSnapshot_CoversAllColumns(t *testing.T) {
+	pool := testdb.New(t)
+	rows, err := pool.Query(context.Background(), `select column_name from information_schema.columns where table_schema='public' and table_name='songs'`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	cols := map[string]bool{}
+	for rows.Next() {
+		var c string
+		if err := rows.Scan(&c); err != nil {
+			t.Fatal(err)
+		}
+		cols[c] = true
+	}
+	src, err := os.ReadFile("queries/songs.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := string(src)
+	i := strings.Index(block, "-- name: RestoreSnapshot")
+	j := strings.Index(block[i:], "where s.item_id")
+	restored := map[string]bool{"item_id": true}
+	for _, m := range regexp.MustCompile(`(\w+) = r\.(\w+)`).FindAllStringSubmatch(block[i:i+j], -1) {
+		restored[m[1]] = true
+	}
+	if len(restored) != len(cols) {
+		t.Fatalf("RestoreSnapshot restores %d columns (incl. item_id), songs has %d: %v", len(restored), len(cols), cols)
+	}
+	for c := range cols {
+		if !restored[c] {
+			t.Fatalf("column %s not restored", c)
+		}
 	}
 }

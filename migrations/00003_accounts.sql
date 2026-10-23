@@ -35,6 +35,7 @@ create table suggestions (
   decided_at  timestamptz
 );
 create unique index suggestions_one_open on suggestions (item_id, user_id) where status = 'open';
+create index suggestions_user on suggestions (user_id, created_at);
 create index suggestions_item on suggestions (item_id);
 create index suggestions_open_queue on suggestions (created_at, id) where status = 'open';
 

@@ -205,12 +205,14 @@ func (q *Queries) InsertHistory(ctx context.Context, arg InsertHistoryParams) (S
 }
 
 const lastDoneAt = `-- name: LastDoneAt :one
-select max(updated_at)::timestamptz as last_done_at from requests where status = 'done'
+select l.updated_at as last_done_at
+from (select 1) d
+left join requests l on l.id = (select id from requests where status = 'done' order by updated_at desc, id desc limit 1)
 `
 
-func (q *Queries) LastDoneAt(ctx context.Context) (time.Time, error) {
+func (q *Queries) LastDoneAt(ctx context.Context) (*time.Time, error) {
 	row := q.db.QueryRow(ctx, lastDoneAt)
-	var last_done_at time.Time
+	var last_done_at *time.Time
 	err := row.Scan(&last_done_at)
 	return last_done_at, err
 }
@@ -433,16 +435,20 @@ func (q *Queries) ListOpenSuggestionsForItem(ctx context.Context, itemID int64) 
 }
 
 const pendingRetryStats = `-- name: PendingRetryStats :one
-select count(*)::bigint as pending, coalesce(max(attempts), 0)::int as max_attempts, min(next_attempt_at)::timestamptz as next_attempt_at
-from requests where status = 'pending' and attempts > 0
+select (select count(*) from requests where status = 'pending' and attempts > 0)::bigint as pending,
+  (select coalesce(max(attempts), 0) from requests where status = 'pending' and attempts > 0)::int as max_attempts,
+  n.next_attempt_at
+from (select 1) d
+left join requests n on n.id = (select id from requests where status = 'pending' and attempts > 0 order by next_attempt_at, id limit 1)
 `
 
 type PendingRetryStatsRow struct {
 	Pending       int64
 	MaxAttempts   int32
-	NextAttemptAt time.Time
+	NextAttemptAt *time.Time
 }
 
+// next_attempt_at comes through a left join so it stays nullable (NULL when nothing is pending-retry).
 func (q *Queries) PendingRetryStats(ctx context.Context) (PendingRetryStatsRow, error) {
 	row := q.db.QueryRow(ctx, pendingRetryStats)
 	var i PendingRetryStatsRow
@@ -450,8 +456,8 @@ func (q *Queries) PendingRetryStats(ctx context.Context) (PendingRetryStatsRow, 
 	return i, err
 }
 
-const setSuggestionStatus = `-- name: SetSuggestionStatus :exec
-update suggestions set status = $2, reviewer_id = $3, reason = $4, decided_at = now() where id = $1
+const setSuggestionStatus = `-- name: SetSuggestionStatus :execrows
+update suggestions set status = $2, reviewer_id = $3, reason = $4, decided_at = now() where id = $1 and status = 'open'
 `
 
 type SetSuggestionStatusParams struct {
@@ -461,14 +467,18 @@ type SetSuggestionStatusParams struct {
 	Reason     *string
 }
 
-func (q *Queries) SetSuggestionStatus(ctx context.Context, arg SetSuggestionStatusParams) error {
-	_, err := q.db.Exec(ctx, setSuggestionStatus,
+// Only open suggestions can be decided; 0 rows means it was already decided.
+func (q *Queries) SetSuggestionStatus(ctx context.Context, arg SetSuggestionStatusParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setSuggestionStatus,
 		arg.ID,
 		arg.Status,
 		arg.ReviewerID,
 		arg.Reason,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const supersedeOthers = `-- name: SupersedeOthers :exec

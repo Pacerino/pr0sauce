@@ -133,7 +133,7 @@ func (q *Queries) LockSong(ctx context.Context, itemID int64) (int64, error) {
 	return item_id, err
 }
 
-const restoreSnapshot = `-- name: RestoreSnapshot :exec
+const restoreSnapshot = `-- name: RestoreSnapshot :execrows
 update songs s set
   title = r.title, artist = r.artist, album = r.album, provider = r.provider,
   spotify_url = r.spotify_url, spotify_id = r.spotify_id,
@@ -142,7 +142,7 @@ update songs s set
   apple_music_url = r.apple_music_url, isrc = r.isrc, deezer_url = r.deezer_url,
   corrected_at = r.corrected_at
 from jsonb_populate_record(null::songs, $2::jsonb) r
-where s.item_id = $1
+where s.item_id = $1 and r.item_id = $1
 `
 
 type RestoreSnapshotParams struct {
@@ -151,9 +151,14 @@ type RestoreSnapshotParams struct {
 }
 
 // Writes every column back from a SongSnapshot jsonb, corrected_at included.
-func (q *Queries) RestoreSnapshot(ctx context.Context, arg RestoreSnapshotParams) error {
-	_, err := q.db.Exec(ctx, restoreSnapshot, arg.ItemID, arg.Snapshot)
-	return err
+// EVERY songs column must be listed below (TestRestoreSnapshot_CoversAllColumns
+// fails otherwise). The snapshot must belong to the target item; 0 rows = mismatch.
+func (q *Queries) RestoreSnapshot(ctx context.Context, arg RestoreSnapshotParams) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreSnapshot, arg.ItemID, arg.Snapshot)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const searchSongs = `-- name: SearchSongs :many
