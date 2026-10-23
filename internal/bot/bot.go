@@ -14,6 +14,12 @@
 //
 // A request left in replying by a crash is failed at startup by
 // RecoverReplying and never posted again.
+//
+// Remaining crash window: a new item's song is stored (UpsertSong) before the
+// request is claimed. A crash between the two leaves the request pending with
+// the song already known, so the retry takes the known-item path and the
+// requester gets the "already asked" PM instead of the comment. That is a
+// different reply, never a double answer and never a lost mention.
 package bot
 
 import (
@@ -50,10 +56,12 @@ const (
 	kindComment = "comment"
 	kindPM      = "pm"
 
-	// rejectedPrefix marks last_error of a request released from replying
-	// because pr0gramm explicitly refused the comment. Its retry posts the
-	// comment again instead of the "someone already asked" PM.
-	rejectedPrefix = "rejected: "
+	// rejectedCommentPrefix / rejectedPMPrefix mark last_error of a request
+	// released from replying because pr0gramm explicitly refused the reply.
+	// The retry sends the same kind again: a refused comment is re-posted as
+	// a comment (not the "someone already asked" PM), a refused PM stays a PM.
+	rejectedCommentPrefix = "rejected comment: "
+	rejectedPMPrefix      = "rejected pm: "
 )
 
 // Deps are the bot's collaborators. A nil Clock means the system clock.
@@ -93,7 +101,7 @@ func New(deps Deps, cfg config.Config, log *slog.Logger) (*Bot, error) {
 		log = slog.Default()
 	}
 	if cfg.MaxAttempts <= 0 {
-		cfg.MaxAttempts = 5
+		return nil, fmt.Errorf("bot: MaxAttempts must be > 0, got %d", cfg.MaxAttempts)
 	}
 	return &Bot{
 		store: deps.Store, pr0: deps.Pr0, rec: deps.Recognizer, links: deps.Linker, clock: deps.Clock,
@@ -198,7 +206,7 @@ func (b *Bot) process(ctx context.Context, r db.Request) (stop bool, err error) 
 	switch {
 	case err == nil:
 		// A request released after an explicit rejection still owes its comment.
-		asComment := r.LastError != nil && strings.HasPrefix(*r.LastError, rejectedPrefix)
+		asComment := r.LastError != nil && strings.HasPrefix(*r.LastError, rejectedCommentPrefix)
 		return b.reply(ctx, log, r, song, asComment)
 	case !errors.Is(err, ErrNotFound):
 		return false, fmt.Errorf("bot: get song %d: %w", r.ItemID, err)
@@ -271,6 +279,12 @@ func (b *Bot) process(ctx context.Context, r db.Request) (stop bool, err error) 
 // tags on a hit) or a PM. Nothing here is ever repeated unless pr0gramm
 // explicitly refused the post.
 func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db.Song, asComment bool) (bool, error) {
+	// The claim and everything after it must not be cut short by shutdown:
+	// a cancelled claim right after UpsertSong would widen the crash window
+	// described in the package doc, and a cancelled post or status write
+	// would leave the outcome unrecorded. Every call below is bounded by its
+	// client's own timeout.
+	ctx = context.WithoutCancel(ctx)
 	n, err := b.store.MarkReplying(ctx, r.ID)
 	if err != nil {
 		return false, fmt.Errorf("bot: claim request %d: %w", r.ID, err)
@@ -279,9 +293,9 @@ func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db
 		log.Warn("request already claimed elsewhere, not replying")
 		return false, nil
 	}
-	// From here on the outcome must be recorded even during shutdown; every
-	// call below is bounded by its client's own timeout.
-	ctx = context.WithoutCancel(ctx)
+	// If a Store call below fails after a successful post, the request stays
+	// in replying. That is safe: RecoverReplying marks it failed at the next
+	// start, and nothing ever re-posts a replying request.
 
 	link := b.cfg.PublicBaseURL + "/" + strconv.FormatInt(r.ItemID, 10)
 	kind := kindPM
@@ -307,7 +321,7 @@ func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db
 
 	if postErr != nil {
 		if pr0gramm.IsRejected(postErr) {
-			return true, b.retryFromReplying(ctx, log, r, postErr)
+			return true, b.retryFromReplying(ctx, log, r, kind, postErr)
 		}
 		log.Error("reply failed, state ambiguous, not retrying", "kind", kind, "err", postErr)
 		if err := b.finish(ctx, log, r, statusFailed, nil, kind+": "+postErr.Error()); err != nil {
@@ -359,10 +373,14 @@ func (b *Bot) retry(ctx context.Context, log *slog.Logger, r db.Request, cause e
 
 // retryFromReplying releases a claimed request whose reply pr0gramm refused
 // outright, so it was definitely not posted.
-func (b *Bot) retryFromReplying(ctx context.Context, log *slog.Logger, r db.Request, cause error) error {
+func (b *Bot) retryFromReplying(ctx context.Context, log *slog.Logger, r db.Request, kind string, cause error) error {
 	attempts := int(r.Attempts) + 1
 	next := b.clock.Now().Add(backoff(attempts))
-	msg := rejectedPrefix + cause.Error()
+	prefix := rejectedPMPrefix
+	if kind == kindComment {
+		prefix = rejectedCommentPrefix
+	}
+	msg := prefix + cause.Error()
 	n, err := b.store.RetryFromReplying(ctx, db.RetryFromReplyingParams{ID: r.ID, NextAttemptAt: next, LastError: &msg})
 	if err != nil {
 		return fmt.Errorf("bot: release request %d: %w", r.ID, err)

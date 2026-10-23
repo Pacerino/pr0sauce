@@ -741,3 +741,52 @@ func TestMarkHandledRead_OnlyAfterHandled(t *testing.T) {
 		t.Fatalf("markReads = %v; want [3 5 4]", e.pr0.markReads)
 	}
 }
+
+func TestProcess_PMRejectedRetriesAsPM(t *testing.T) {
+	e := setup(t, nil)
+	e.goLive(t)
+	if err := e.q.UpsertSong(context.Background(), db.UpsertSongParams{
+		ItemID: itemID, Title: ptr("Kumite"), Artist: ptr("Paul Hertzog"), Album: ptr("Bloodsport"), Provider: "shazam", RecognizedAt: testNow,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	e.pr0.pmErr = func(n int) error {
+		if n == 1 {
+			return &pr0gramm.APIError{Path: "/inbox/post", Status: 429}
+		}
+		return nil
+	}
+	e.ingest(t, mention(12, itemID, "bob"))
+	e.process(t)
+	if r := e.req(t, 12); r.Status != "pending" || r.Attempts != 1 {
+		t.Fatalf("row = %+v; want pending, 1 attempt", r)
+	}
+	e.clock.Advance(time.Minute)
+	e.process(t)
+	if len(e.pr0.posts) != 0 || len(e.pr0.tags) != 0 || len(e.pr0.pms) != 2 {
+		t.Fatalf("posts=%d tags=%d pms=%d; want 0/0/2", len(e.pr0.posts), len(e.pr0.tags), len(e.pr0.pms))
+	}
+	if e.pr0.pms[1] != e.pr0.pms[0] || e.pr0.pms[1].Recipient != "bob" {
+		t.Fatalf("retry pm = %+v; want same PM to bob", e.pr0.pms[1])
+	}
+	if r := e.req(t, 12); r.Status != "done" || str(r.ReplyKind) != "pm" {
+		t.Fatalf("row = %+v; want done/pm", r)
+	}
+}
+
+func TestNew_RejectsNonPositiveMaxAttempts(t *testing.T) {
+	deps := bot.Deps{Store: nopStore{}, Pr0: newFakePr0(), Recognizer: &fakeRecognizer{}, Linker: &fakeLinker{}}
+	for _, n := range []int{0, -1} {
+		if _, err := bot.New(deps, config.Config{MaxAttempts: n}, nil); err == nil {
+			t.Fatalf("New with MaxAttempts=%d succeeded; want error", n)
+		}
+	}
+	if _, err := bot.New(deps, config.Config{MaxAttempts: 1}, nil); err != nil {
+		t.Fatalf("New with MaxAttempts=1: %v", err)
+	}
+}
+
+func ptr[T any](v T) *T { return &v }
+
+// nopStore satisfies bot.Store for constructor tests; it is never called.
+type nopStore struct{ bot.Store }
