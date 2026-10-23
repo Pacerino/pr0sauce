@@ -34,8 +34,8 @@ var kumite = recognize.Result{
 	CoverURL: "https://is1.example/cover.jpg", AppleMusicURL: "https://music.apple.com/x", ISRC: "TCAFX2160415",
 }
 
-const kumiteComment = "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: Bloodsport\n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung 23.10.2026 um 15:15"
-const missComment = "Es wurden keine Informationen zu dem Lied gefunden\n\nZeitpunkt der Überprüfung 23.10.2026 um 15:15"
+const kumiteComment = "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: Bloodsport\n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung 23.10.2026 um 15:15\n\nFalsch erkannt? Über den Link kannst du eine Korrektur vorschlagen."
+const missComment = "Es wurden keine Informationen zu dem Lied gefunden\n\nZeitpunkt der Überprüfung 23.10.2026 um 15:15\n\nKennst du den Song? Schlag ihn hier vor: https://pr0sauce.info/6796145"
 
 type env struct {
 	bot   *bot.Bot
@@ -349,7 +349,7 @@ func TestProcess_HitWithoutISRCSkipsDeezer(t *testing.T) {
 	e.rec.result = recognize.Result{Found: true, Title: "Kumite", Artist: "Paul Hertzog", AppleMusicURL: "https://music.apple.com/x"}
 	e.ingest(t, mention(11, itemID, "alice"))
 	e.process(t)
-	want := "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: \n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung " + checked
+	want := "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: \n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung " + checked + "\n\nFalsch erkannt? Über den Link kannst du eine Korrektur vorschlagen."
 	if len(e.pr0.posts) != 1 || e.pr0.posts[0].Text != want || len(e.link.calls) != 0 {
 		t.Fatalf("posts = %+v calls = %v", e.pr0.posts, e.link.calls)
 	}
@@ -382,6 +382,9 @@ func TestProcess_MissPostsMissComment(t *testing.T) {
 	if want := []post{{itemID, 11, missComment}}; !reflect.DeepEqual(e.pr0.posts, want) {
 		t.Fatalf("posts = %+v\nwant  %+v", e.pr0.posts, want)
 	}
+	if !strings.Contains(e.pr0.posts[0].Text, "https://pr0sauce.info/6796145") {
+		t.Fatalf("miss comment lacks suggest link: %q", e.pr0.posts[0].Text)
+	}
 	if len(e.pr0.tags) != 0 || len(e.link.calls) != 0 {
 		t.Fatalf("tags=%v links=%v; want none", e.pr0.tags, e.link.calls)
 	}
@@ -403,7 +406,7 @@ func TestProcess_SecondMentionGetsPM(t *testing.T) {
 	if len(e.pr0.posts) != 1 || e.pr0.posts[0].ParentID != 11 {
 		t.Fatalf("posts = %+v; want one comment under 11", e.pr0.posts)
 	}
-	want := []pm{{"bob", "Hallo bob,\n\nDu hast bei https://pr0gramm.com/new/6796145 nach der Musik gefragt.\nJemand hat bereits danach gefragt, daher erhälst du hier nur eine Kopie.\n\nTitel: Kumite\nAlbum: Bloodsport\nArtist: Paul Hertzog\n\nHier ist ein Link: https://pr0sauce.info/6796145"}}
+	want := []pm{{"bob", "Hallo bob,\n\nDu hast bei https://pr0gramm.com/new/6796145 nach der Musik gefragt.\nJemand hat bereits danach gefragt, daher erhälst du hier nur eine Kopie.\n\nTitel: Kumite\nAlbum: Bloodsport\nArtist: Paul Hertzog\n\nHier ist ein Link: https://pr0sauce.info/6796145\n\nFalsch erkannt? Über den Link kannst du eine Korrektur vorschlagen."}}
 	if !reflect.DeepEqual(e.pr0.pms, want) {
 		t.Fatalf("pms = %q\nwant  %q", e.pr0.pms, want)
 	}
@@ -423,7 +426,7 @@ func TestProcess_KnownMissGetsMissPM(t *testing.T) {
 	}
 	e.ingest(t, mention(12, itemID, "bob"))
 	e.process(t)
-	want := []pm{{"bob", "Hallo bob,\n\nDu hast bei https://pr0gramm.com/new/6796145 nach der Musik gefragt.\nLeider wurden keine Informationen gefunden."}}
+	want := []pm{{"bob", "Hallo bob,\n\nDu hast bei https://pr0gramm.com/new/6796145 nach der Musik gefragt.\nLeider wurden keine Informationen gefunden.\n\nKennst du den Song? Schlag ihn hier vor: https://pr0sauce.info/6796145"}}
 	if !reflect.DeepEqual(e.pr0.pms, want) || len(e.pr0.posts) != 0 || len(e.pr0.itemCalls) != 0 {
 		t.Fatalf("pms = %q posts=%v items=%v", e.pr0.pms, e.pr0.posts, e.pr0.itemCalls)
 	}
@@ -573,7 +576,7 @@ func TestProcess_CommentTooSoonAfterReplyingRetries(t *testing.T) {
 	if len(e.pr0.posts) != 2 || len(e.pr0.pms) != 0 {
 		t.Fatalf("posts=%d pms=%d; want 2 comment attempts, no pm", len(e.pr0.posts), len(e.pr0.pms))
 	}
-	wantText := "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: Bloodsport\n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung 23.10.2026 um 15:16"
+	wantText := "Es wurden folgende Informationen dazu gefunden:\nKumite - Paul Hertzog\nAus dem Album: Bloodsport\n\nHier ist ein Link: https://pr0sauce.info/6796145\nZeitpunkt der Überprüfung 23.10.2026 um 15:16\n\nFalsch erkannt? Über den Link kannst du eine Korrektur vorschlagen."
 	if p := e.pr0.posts[1]; p.ParentID != 11 || p.Text != wantText {
 		t.Fatalf("retry post = %+v", p)
 	}

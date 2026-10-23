@@ -1,7 +1,7 @@
 import { safeHttpUrl } from "@/lib/format";
 import { internalFetch } from "@/lib/internal";
 import { getCurrentUser, getSessionToken } from "@/lib/session";
-import { remainingToApprove } from "@/lib/suggestions";
+import { remainingToApprove, suggestTriggerLabel } from "@/lib/suggestions";
 import type { Suggestion } from "@/lib/types";
 import { SuggestForm } from "./SuggestForm";
 import { VoteButtons } from "./VoteButtons";
@@ -23,14 +23,14 @@ function Trigger({ children }: { children: React.ReactNode }) {
 }
 
 /** Correction trigger (login link or form) plus the list of open suggestions. */
-export async function Suggestions({ itemId }: { itemId: number }) {
+export async function Suggestions({ itemId, found }: { itemId: number; found: boolean }) {
   const [user, list] = await Promise.all([getCurrentUser(), loadSuggestions(itemId)]);
 
   return (
     <>
       {!user ? (
         <a href={`/api/auth/login?next=/${itemId}`} className="rounded bg-[#1f2124] p-2.5 hover:bg-surface">
-          ⚑ Falsch erkannt? Korrektur vorschlagen
+          ⚑ {suggestTriggerLabel(found)}
         </a>
       ) : user.banned ? (
         <Trigger>
@@ -38,7 +38,7 @@ export async function Suggestions({ itemId }: { itemId: number }) {
         </Trigger>
       ) : (
         <details className="rounded bg-[#1f2124] p-2.5">
-          <summary className="cursor-pointer">⚑ Falsch erkannt? Korrektur vorschlagen</summary>
+          <summary className="cursor-pointer">⚑ {suggestTriggerLabel(found)}</summary>
           <SuggestForm itemId={itemId} />
         </details>
       )}

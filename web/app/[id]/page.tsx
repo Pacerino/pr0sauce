@@ -97,7 +97,7 @@ export default async function SongPage({ params }: Props) {
             {song.comment && ` · Bot-Kommentar +${song.comment.up} / −${song.comment.down}`}
           </div>
         </a>
-        <Suggestions itemId={song.itemId} />
+        <Suggestions itemId={song.itemId} found={song.found} />
         {isMod && (
           <Link href={`/dashboard/songs/${song.itemId}`} className="text-xs text-accent hover:underline">
             Verlauf (Moderation)

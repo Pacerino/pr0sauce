@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mapApiError, remainingToApprove, validateSuggestion } from "./suggestions";
+import { mapApiError, remainingToApprove, suggestTriggerLabel, validateSuggestion } from "./suggestions";
 
 describe("remainingToApprove", () => {
   it("is 0 once up and net both reach 5", () => {
@@ -63,5 +63,14 @@ describe("mapApiError", () => {
   it("has a generic fallback", () => {
     expect(mapApiError(500, "boom", "vote")).toBe("Das hat leider nicht geklappt");
     expect(mapApiError(401, "x", "vote")).toBe("Bitte anmelden");
+  });
+});
+
+describe("suggestTriggerLabel", () => {
+  it("asks for a correction on hits", () => {
+    expect(suggestTriggerLabel(true)).toBe("Falsch erkannt? Korrektur vorschlagen");
+  });
+  it("asks for the song on misses", () => {
+    expect(suggestTriggerLabel(false)).toBe("Kennst du den Song? Jetzt vorschlagen");
   });
 });

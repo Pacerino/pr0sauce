@@ -9,6 +9,11 @@ export function remainingToApprove(up: number, net: number): number {
   return Math.max(0, APPROVE_THRESHOLD - up, APPROVE_THRESHOLD - net);
 }
 
+/** Label of the suggestion trigger: a miss asks for the song, a hit for a correction. */
+export function suggestTriggerLabel(found: boolean): string {
+  return found ? "Falsch erkannt? Korrektur vorschlagen" : "Kennst du den Song? Jetzt vorschlagen";
+}
+
 export type SuggestionInput = { title: string; artist: string; album?: string; proofUrl?: string };
 export type SuggestionErrors = Partial<Record<"title" | "artist" | "album" | "proofUrl", string>>;
 

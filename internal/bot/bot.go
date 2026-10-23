@@ -320,7 +320,7 @@ func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db
 		if song.Title != nil {
 			text = fmt.Sprintf(commentHit, deref(song.Title), deref(song.Artist), deref(song.Album), link, b.checkedAt())
 		} else {
-			text = fmt.Sprintf(commentMiss, b.checkedAt())
+			text = fmt.Sprintf(commentMiss, b.checkedAt(), link)
 		}
 		postErr = b.pr0.PostComment(ctx, r.ItemID, r.MessageID, text)
 	} else {
@@ -328,7 +328,7 @@ func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db
 		if song.Title != nil {
 			text = fmt.Sprintf(pmKnownHit, r.Requester, r.ItemID, deref(song.Title), deref(song.Album), deref(song.Artist), link)
 		} else {
-			text = fmt.Sprintf(pmKnownMiss, r.Requester, r.ItemID)
+			text = fmt.Sprintf(pmKnownMiss, r.Requester, r.ItemID, link)
 		}
 		postErr = b.pr0.SendMessage(ctx, r.Requester, text)
 	}
