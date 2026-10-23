@@ -1,8 +1,10 @@
 -- name: InsertRequestIgnore :one
 -- Returns true when a row was inserted, false when message_id already existed.
+-- status and next_attempt_at come from the app (its clock), so skipped rows are
+-- written atomically and due times never depend on the DB clock.
 with ins as (
-  insert into requests (message_id, item_id, requester, thumb, mentioned_at, status)
-  values ($1, $2, $3, $4, $5, 'pending')
+  insert into requests (message_id, item_id, requester, thumb, mentioned_at, status, next_attempt_at)
+  values ($1, $2, $3, $4, $5, sqlc.arg(status), sqlc.arg(next_attempt_at))
   on conflict (message_id) do nothing
   returning 1
 )
@@ -28,6 +30,13 @@ where id = $1 and status = 'pending';
 -- name: MarkReplying :execrows
 -- Claims a request; 0 rows affected means someone else already moved it.
 update requests set status = 'replying', updated_at = now() where id = $1 and status = 'pending';
+
+-- name: RetryFromReplying :execrows
+-- Releases a claimed request back to pending, only when pr0gramm explicitly
+-- rejected the reply (it was definitely not posted).
+update requests
+set status = 'pending', attempts = attempts + 1, next_attempt_at = $2, last_error = $3, updated_at = now()
+where id = $1 and status = 'replying';
 
 -- name: FailStaleReplying :many
 update requests

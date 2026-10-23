@@ -121,8 +121,8 @@ func (q *Queries) FailStaleReplying(ctx context.Context) ([]Request, error) {
 
 const insertRequestIgnore = `-- name: InsertRequestIgnore :one
 with ins as (
-  insert into requests (message_id, item_id, requester, thumb, mentioned_at, status)
-  values ($1, $2, $3, $4, $5, 'pending')
+  insert into requests (message_id, item_id, requester, thumb, mentioned_at, status, next_attempt_at)
+  values ($1, $2, $3, $4, $5, $6, $7)
   on conflict (message_id) do nothing
   returning 1
 )
@@ -130,14 +130,18 @@ select exists (select 1 from ins) as inserted
 `
 
 type InsertRequestIgnoreParams struct {
-	MessageID   int64
-	ItemID      int64
-	Requester   string
-	Thumb       string
-	MentionedAt time.Time
+	MessageID     int64
+	ItemID        int64
+	Requester     string
+	Thumb         string
+	MentionedAt   time.Time
+	Status        string
+	NextAttemptAt time.Time
 }
 
 // Returns true when a row was inserted, false when message_id already existed.
+// status and next_attempt_at come from the app (its clock), so skipped rows are
+// written atomically and due times never depend on the DB clock.
 func (q *Queries) InsertRequestIgnore(ctx context.Context, arg InsertRequestIgnoreParams) (bool, error) {
 	row := q.db.QueryRow(ctx, insertRequestIgnore,
 		arg.MessageID,
@@ -145,6 +149,8 @@ func (q *Queries) InsertRequestIgnore(ctx context.Context, arg InsertRequestIgno
 		arg.Requester,
 		arg.Thumb,
 		arg.MentionedAt,
+		arg.Status,
+		arg.NextAttemptAt,
 	)
 	var inserted bool
 	err := row.Scan(&inserted)
@@ -158,6 +164,28 @@ update requests set status = 'replying', updated_at = now() where id = $1 and st
 // Claims a request; 0 rows affected means someone else already moved it.
 func (q *Queries) MarkReplying(ctx context.Context, id int64) (int64, error) {
 	result, err := q.db.Exec(ctx, markReplying, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const retryFromReplying = `-- name: RetryFromReplying :execrows
+update requests
+set status = 'pending', attempts = attempts + 1, next_attempt_at = $2, last_error = $3, updated_at = now()
+where id = $1 and status = 'replying'
+`
+
+type RetryFromReplyingParams struct {
+	ID            int64
+	NextAttemptAt time.Time
+	LastError     *string
+}
+
+// Releases a claimed request back to pending, only when pr0gramm explicitly
+// rejected the reply (it was definitely not posted).
+func (q *Queries) RetryFromReplying(ctx context.Context, arg RetryFromReplyingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, retryFromReplying, arg.ID, arg.NextAttemptAt, arg.LastError)
 	if err != nil {
 		return 0, err
 	}

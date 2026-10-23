@@ -82,7 +82,7 @@ func TestInsertRequestIgnore_Idempotent(t *testing.T) {
 	pool := testdb.New(t)
 	ctx := context.Background()
 	q := db.New(pool)
-	p := db.InsertRequestIgnoreParams{MessageID: 42, ItemID: 7, Requester: "bob", Thumb: "t.jpg", MentionedAt: time.Now()}
+	p := db.InsertRequestIgnoreParams{MessageID: 42, ItemID: 7, Requester: "bob", Thumb: "t.jpg", MentionedAt: time.Now(), Status: "pending", NextAttemptAt: time.Now()}
 
 	first, err := q.InsertRequestIgnore(ctx, p)
 	if err != nil || !first {
@@ -183,7 +183,7 @@ func TestRequestLifecycle(t *testing.T) {
 	q := db.New(pool)
 	now := time.Now()
 	for i := int64(1); i <= 2; i++ {
-		if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: i, ItemID: i, Requester: "bob", MentionedAt: now}); err != nil {
+		if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: i, ItemID: i, Requester: "bob", MentionedAt: now, Status: "pending", NextAttemptAt: now}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -236,7 +236,7 @@ func TestMarkReplying_OnlyFromPending(t *testing.T) {
 	now := time.Now()
 	ids := map[string]int64{}
 	for i, st := range []string{"pending", "replying", "done", "failed", "skipped"} {
-		if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: int64(i + 1), ItemID: 1, Requester: "bob", MentionedAt: now}); err != nil {
+		if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: int64(i + 1), ItemID: 1, Requester: "bob", MentionedAt: now, Status: "pending", NextAttemptAt: now}); err != nil {
 			t.Fatal(err)
 		}
 		var id int64
@@ -257,6 +257,79 @@ func TestMarkReplying_OnlyFromPending(t *testing.T) {
 	}
 	if n, err := q.MarkReplying(ctx, ids["pending"]); err != nil || n != 1 {
 		t.Fatalf("MarkReplying(pending) = %d, %v; want 1", n, err)
+	}
+}
+
+func TestInsertRequestIgnore_StatusAndDueTime(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	// An app clock far in the past: the row must be due at that clock, not at the DB's now().
+	clock := time.Date(2001, 1, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: 1, ItemID: 1, Requester: "a", MentionedAt: clock, Status: "pending", NextAttemptAt: clock}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: 2, ItemID: 2, Requester: "b", MentionedAt: clock, Status: "skipped", NextAttemptAt: clock}); err != nil {
+		t.Fatal(err)
+	}
+	due, err := q.DueRequests(ctx, db.DueRequestsParams{Now: clock, Lim: 10})
+	if err != nil || len(due) != 1 || due[0].MessageID != 1 {
+		t.Fatalf("due = %+v, %v; want only message 1", due, err)
+	}
+	var st string
+	if err := pool.QueryRow(ctx, `select status from requests where message_id = 2`).Scan(&st); err != nil || st != "skipped" {
+		t.Fatalf("message 2 status = %q, %v; want skipped", st, err)
+	}
+	// a second insert with another status must not touch the existing row
+	if ins, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: 2, ItemID: 2, Requester: "b", MentionedAt: clock, Status: "pending", NextAttemptAt: clock}); err != nil || ins {
+		t.Fatalf("re-insert = %v, %v; want false", ins, err)
+	}
+	if err := pool.QueryRow(ctx, `select status from requests where message_id = 2`).Scan(&st); err != nil || st != "skipped" {
+		t.Fatalf("message 2 status after re-insert = %q, %v; want skipped", st, err)
+	}
+}
+
+func TestRetryFromReplying_OnlyFromReplying(t *testing.T) {
+	pool := testdb.New(t)
+	ctx := context.Background()
+	q := db.New(pool)
+	now := time.Now()
+	ids := map[string]int64{}
+	for i, st := range []string{"pending", "replying", "done", "failed", "skipped"} {
+		if _, err := q.InsertRequestIgnore(ctx, db.InsertRequestIgnoreParams{MessageID: int64(i + 1), ItemID: 1, Requester: "bob", MentionedAt: now, Status: st, NextAttemptAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		var id int64
+		if err := pool.QueryRow(ctx, `update requests set status = $1 where message_id = $2 returning id`, st, i+1).Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids[st] = id
+	}
+	next := now.Add(time.Minute)
+	for _, st := range []string{"pending", "done", "failed", "skipped"} {
+		n, err := q.RetryFromReplying(ctx, db.RetryFromReplyingParams{ID: ids[st], NextAttemptAt: next, LastError: ptr("x")})
+		if err != nil || n != 0 {
+			t.Fatalf("RetryFromReplying(%s) = %d, %v; want 0", st, n, err)
+		}
+		var got string
+		var attempts int
+		if err := pool.QueryRow(ctx, `select status, attempts from requests where id = $1`, ids[st]).Scan(&got, &attempts); err != nil || got != st || attempts != 0 {
+			t.Fatalf("%s row became %q/%d, %v", st, got, attempts, err)
+		}
+	}
+	n, err := q.RetryFromReplying(ctx, db.RetryFromReplyingParams{ID: ids["replying"], NextAttemptAt: next, LastError: ptr("commentTooSoon")})
+	if err != nil || n != 1 {
+		t.Fatalf("RetryFromReplying(replying) = %d, %v; want 1", n, err)
+	}
+	var st string
+	var attempts int
+	var nextAt time.Time
+	var lastErr string
+	if err := pool.QueryRow(ctx, `select status, attempts, next_attempt_at, last_error from requests where id = $1`, ids["replying"]).Scan(&st, &attempts, &nextAt, &lastErr); err != nil {
+		t.Fatal(err)
+	}
+	if st != "pending" || attempts != 1 || !nextAt.Equal(next.Truncate(time.Microsecond)) || lastErr != "commentTooSoon" {
+		t.Fatalf("row = %s/%d/%v/%q", st, attempts, nextAt, lastErr)
 	}
 }
 
