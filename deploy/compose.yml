@@ -47,6 +47,9 @@ services:
     command: ["bot"]
     restart: unless-stopped
     stop_grace_period: 45s
+    environment:
+      SENTRY_RELEASE: ${TAG}
+      SENTRY_ENVIRONMENT: production
     depends_on:
       migrate:
         condition: service_completed_successfully

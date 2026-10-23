@@ -19,6 +19,8 @@ import (
 	"github.com/Pacerino/pr0sauce/internal/db"
 	"github.com/Pacerino/pr0sauce/internal/deezer"
 	"github.com/Pacerino/pr0sauce/internal/legacy"
+	"github.com/Pacerino/pr0sauce/internal/obs"
+	"github.com/getsentry/sentry-go"
 )
 
 const usage = "usage: pr0sauce <migrate|import-legacy|bot|bot-login|api|healthcheck>\n"
@@ -104,7 +106,16 @@ func runBot(ctx context.Context, _ []string) error {
 	if err != nil {
 		return err
 	}
-	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	var h slog.Handler = slog.NewJSONHandler(os.Stdout, nil)
+	enabled, serr := obs.Init(cfg.SentryDSN, cfg.SentryEnvironment, cfg.SentryRelease)
+	if enabled {
+		defer sentry.Flush(5 * time.Second)
+		h = slog.NewMultiHandler(h, obs.NewEventHandler(sentry.CurrentHub()))
+	}
+	log := slog.New(h)
+	if serr != nil {
+		log.Warn("sentry disabled: init failed", "err", serr)
+	}
 	return bot.Run(ctx, cfg, log)
 }
 

@@ -184,3 +184,23 @@ func TestLoad_TrimsInternalToken(t *testing.T) {
 		t.Errorf("token = %q, RequireAPI = %v", cfg.InternalAPIToken, cfg.RequireAPI())
 	}
 }
+
+func TestLoad_Sentry(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"DATABASE_URL": "postgres://x"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SentryDSN != "" || cfg.SentryEnvironment != "production" || cfg.SentryRelease != "" {
+		t.Errorf("defaults = %q %q %q", cfg.SentryDSN, cfg.SentryEnvironment, cfg.SentryRelease)
+	}
+	cfg, err = Load(env(map[string]string{
+		"DATABASE_URL": "postgres://x", "SENTRY_DSN": "https://k@example.invalid/1",
+		"SENTRY_ENVIRONMENT": "staging", "SENTRY_RELEASE": "sha-abc",
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SentryDSN != "https://k@example.invalid/1" || cfg.SentryEnvironment != "staging" || cfg.SentryRelease != "sha-abc" {
+		t.Errorf("got %q %q %q", cfg.SentryDSN, cfg.SentryEnvironment, cfg.SentryRelease)
+	}
+}

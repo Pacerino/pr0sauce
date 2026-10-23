@@ -31,6 +31,10 @@ type Config struct {
 	AdminName string
 	// BotHealthURL is the bot's health endpoint, surfaced to admins.
 	BotHealthURL string
+	// SentryDSN enables Sentry in the bot process; empty disables it entirely.
+	SentryDSN         string
+	SentryEnvironment string
+	SentryRelease     string
 }
 
 // Load reads configuration via getenv (never os.Getenv directly).
@@ -48,6 +52,9 @@ func Load(getenv func(string) string) (Config, error) {
 		InternalAPIToken:  strings.TrimSpace(getenv("INTERNAL_API_TOKEN")),
 		AdminName:         strings.TrimSpace(getenv("ADMIN_PR0_NAME")),
 		BotHealthURL:      getenv("BOT_HEALTH_URL"),
+		SentryDSN:         strings.TrimSpace(getenv("SENTRY_DSN")),
+		SentryEnvironment: def(strings.TrimSpace(getenv("SENTRY_ENVIRONMENT")), "production"),
+		SentryRelease:     strings.TrimSpace(getenv("SENTRY_RELEASE")),
 	}
 	if cfg.DatabaseURL == "" {
 		return Config{}, errors.New("config: DATABASE_URL is required")

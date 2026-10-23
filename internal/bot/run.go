@@ -20,6 +20,7 @@ import (
 	"github.com/Pacerino/pr0sauce/internal/deezer"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
 	"github.com/Pacerino/pr0sauce/internal/recognize"
+	"github.com/getsentry/sentry-go"
 )
 
 const defaultPersistEvery = 10 * time.Minute
@@ -58,6 +59,7 @@ type runner struct {
 	sess    session
 	health  *health
 	clock   Clock
+	tel     Telemetry
 	ln      net.Listener // health listener; nil means listen on cfg.BotHealthAddr
 	poll    time.Duration
 	sync    time.Duration
@@ -98,8 +100,12 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 		return err
 	}
 	clock := systemClock{}
+	var tel Telemetry = noopTelemetry{}
+	if cfg.SentryDSN != "" {
+		tel = NewTelemetry(sentry.CurrentHub(), clock)
+	}
 	r := &runner{
-		cfg: cfg, log: log, bot: b, store: store, sess: client, clock: clock,
+		cfg: cfg, log: log, bot: b, store: store, sess: client, clock: clock, tel: tel,
 		health:       &health{pinger: pool, clock: clock},
 		poll:         cfg.PollInterval,
 		sync:         cfg.CommentSyncInterval,
@@ -109,7 +115,25 @@ func Run(ctx context.Context, cfg config.Config, log *slog.Logger) error {
 	return r.run(ctx)
 }
 
+// telemetry returns the runner's Telemetry, a no-op when none is set.
+func (r *runner) telemetry() Telemetry {
+	if r.tel == nil {
+		return noopTelemetry{}
+	}
+	return r.tel
+}
+
+// guard is deferred in run: it reports a panic to Telemetry and re-panics, so
+// the crash/restart behaviour is unchanged.
+func (r *runner) guard() {
+	if rec := recover(); rec != nil {
+		r.telemetry().Panic(rec)
+		panic(rec)
+	}
+}
+
 func (r *runner) run(ctx context.Context) error {
+	defer r.guard()
 	if err := r.bot.RecoverReplying(ctx); err != nil {
 		return err
 	}
@@ -274,7 +298,11 @@ func (r *runner) setOK() {
 }
 
 func (r *runner) setInvalid() {
+	prev := r.health.getSession()
 	r.health.setSession(sessionInvalid)
+	if prev != sessionInvalid {
+		r.telemetry().SessionInvalid() // once per transition, not per re-check
+	}
 	r.startupUnknown = false
 	r.nextCheck = r.clock.Now().Add(r.recheck)
 	r.log.Error(loginHint)
@@ -307,6 +335,7 @@ func (r *runner) tick(ctx context.Context) {
 		}
 	} else {
 		r.health.markPoll(r.clock.Now())
+		r.telemetry().CheckIn(ctx)
 	}
 	if err := r.bot.ProcessDue(ctx); err != nil {
 		if r.stepFailed(ctx, "process", err) {
