@@ -43,11 +43,11 @@ func TestLoad_Defaults(t *testing.T) {
 }
 
 func TestLoad_BannedUsers(t *testing.T) {
-	cfg, err := Load(env(map[string]string{"DATABASE_URL": "x", "BANNED_USERS": " natr0n, ,Foo "}))
+	cfg, err := Load(env(map[string]string{"DATABASE_URL": "x", "BANNED_USERS": " banneduser, ,Foo "}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"natr0n", "Foo"}; !reflect.DeepEqual(cfg.BannedUsers, want) {
+	if want := []string{"banneduser", "Foo"}; !reflect.DeepEqual(cfg.BannedUsers, want) {
 		t.Errorf("BannedUsers = %#v, want %#v", cfg.BannedUsers, want)
 	}
 }
@@ -107,14 +107,14 @@ func TestRequireLegacy(t *testing.T) {
 }
 
 func TestIsBanned_CaseInsensitive(t *testing.T) {
-	cfg, _ := Load(env(map[string]string{"DATABASE_URL": "x", "BANNED_USERS": "natr0n"}))
-	for name, want := range map[string]bool{"NATR0N": true, "natr0n": true, "other": false} {
+	cfg, _ := Load(env(map[string]string{"DATABASE_URL": "x", "BANNED_USERS": "banneduser"}))
+	for name, want := range map[string]bool{"BANNEDUSER": true, "banneduser": true, "other": false} {
 		if got := cfg.IsBanned(name); got != want {
 			t.Errorf("IsBanned(%q) = %v, want %v", name, got, want)
 		}
 	}
 	empty, _ := Load(env(map[string]string{"DATABASE_URL": "x"}))
-	if empty.IsBanned("natr0n") {
+	if empty.IsBanned("banneduser") {
 		t.Error("empty list should ban nobody")
 	}
 }

@@ -93,6 +93,11 @@ func (e *env) ingest(t *testing.T, ms ...pr0gramm.InboxComment) {
 	if err := e.bot.Ingest(context.Background()); err != nil {
 		t.Fatalf("Ingest: %v", err)
 	}
+	// mark_read_after defaults to the database's real now(); the fake clock is
+	// fixed in the past, so make new rows due on it.
+	if _, err := e.pool.Exec(context.Background(), `update requests set mark_read_after = 'epoch' where mark_read_attempts = 0`); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (e *env) process(t *testing.T) {
@@ -715,7 +720,7 @@ func TestMarkHandledRead_OnlyAfterHandled(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// MarkRead fails transiently for message 4: logged, retried next tick.
+	// MarkRead fails transiently for message 4: logged, retried after its backoff.
 	e.pr0.markErr = func(id int64) error {
 		if id == 4 {
 			return &pr0gramm.APIError{Status: 502}
@@ -734,6 +739,7 @@ func TestMarkHandledRead_OnlyAfterHandled(t *testing.T) {
 		}
 	}
 	e.pr0.markErr = nil
+	e.clock.Advance(time.Minute)
 	if err := e.bot.MarkHandledRead(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -790,3 +796,111 @@ func ptr[T any](v T) *T { return &v }
 
 // nopStore satisfies bot.Store for constructor tests; it is never called.
 type nopStore struct{ bot.Store }
+
+// handledRequests ingests n mentions and marks them all done.
+func (e *env) handledRequests(t *testing.T, n int) {
+	t.Helper()
+	e.goLive(t)
+	var ms []pr0gramm.InboxComment
+	for i := int64(1); i <= int64(n); i++ {
+		ms = append(ms, mention(i, itemID, "u"))
+	}
+	e.ingest(t, ms...)
+	if _, err := e.pool.Exec(context.Background(), `update requests set status = 'done'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestMarkHandledRead_CapsPerTick(t *testing.T) {
+	e := setup(t, nil)
+	e.handledRequests(t, 25)
+	for i, want := range []int{10, 20, 25} {
+		if err := e.bot.MarkHandledRead(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := len(e.pr0.markReads); got != want {
+			t.Fatalf("tick %d: MarkRead calls = %d; want %d", i+1, got, want)
+		}
+	}
+}
+
+func TestMarkHandledRead_BacksOffOnFailure(t *testing.T) {
+	e := setup(t, nil)
+	e.handledRequests(t, 1)
+	calls := 0
+	e.pr0.markErr = func(int64) error { calls++; return &pr0gramm.APIError{Path: "/inbox/markRead", Status: 502} }
+	tick := func(wantCalls int) {
+		t.Helper()
+		if err := e.bot.MarkHandledRead(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if calls != wantCalls {
+			t.Fatalf("MarkRead attempts = %d; want %d", calls, wantCalls)
+		}
+	}
+	tick(1)
+	e.clock.Advance(5 * time.Second)
+	tick(1) // still backing off
+	e.clock.Advance(26 * time.Second)
+	tick(2) // 30s elapsed: retried; next backoff is 60s
+	e.clock.Advance(59 * time.Second)
+	tick(2)
+	e.clock.Advance(2 * time.Second)
+	tick(3)
+	var attempts int
+	if err := e.pool.QueryRow(context.Background(), `select mark_read_attempts from requests`).Scan(&attempts); err != nil || attempts != 3 {
+		t.Fatalf("mark_read_attempts = %d, %v; want 3", attempts, err)
+	}
+	if r := e.req(t, 1); r.MarkedRead || r.LastError == nil {
+		t.Fatalf("row = %+v; want unread with last_error", r)
+	}
+}
+
+func TestMarkHandledRead_GivesUpAfterMaxAttempts(t *testing.T) {
+	e := setup(t, nil)
+	e.handledRequests(t, 1)
+	calls := 0
+	e.pr0.markErr = func(int64) error { calls++; return &pr0gramm.APIError{Path: "/inbox/markRead", Status: 502} }
+	for i := 0; i < 12; i++ {
+		if err := e.bot.MarkHandledRead(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		e.clock.Advance(2 * time.Hour) // beyond the 1h cap
+	}
+	if calls != 8 {
+		t.Fatalf("MarkRead attempts = %d; want 8", calls)
+	}
+	e.clock.Advance(24 * 365 * time.Hour)
+	if err := e.bot.MarkHandledRead(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 8 {
+		t.Fatalf("MarkRead retried a year later: %d calls", calls)
+	}
+}
+
+func TestProcess_NoSessionBeforeClaimStaysPending(t *testing.T) {
+	e := setup(t, nil)
+	e.goLive(t)
+	e.ingest(t, mention(1, itemID, "u"))
+	e.pr0.noSession = true
+	if err := e.bot.ProcessDue(context.Background()); !errors.Is(err, bot.ErrAuth) {
+		t.Fatalf("ProcessDue err = %v; want ErrAuth", err)
+	}
+	r := e.req(t, 1)
+	if r.Status != "pending" || r.Attempts != 0 {
+		t.Fatalf("request = %+v; want pending, attempts 0", r)
+	}
+	if len(e.pr0.posts) != 0 || len(e.pr0.pms) != 0 {
+		t.Fatal("something was posted")
+	}
+}
+
+func TestPr0Err_NoSessionIsAuth(t *testing.T) {
+	e := setup(t, nil)
+	e.handledRequests(t, 1)
+	e.pr0.markErr = func(int64) error { return pr0gramm.ErrNoSession }
+	if err := e.bot.MarkHandledRead(context.Background()); !errors.Is(err, bot.ErrAuth) {
+		t.Fatalf("err = %v; want ErrAuth", err)
+	}
+}

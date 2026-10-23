@@ -41,6 +41,14 @@ func (c *Client) ImportCookies(data []byte) error {
 	return nil
 }
 
+// HasSession reports whether the cookie jar holds a usable "me" cookie. It
+// does not contact pr0gramm, so it says nothing about whether the session is
+// still valid.
+func (c *Client) HasSession() bool {
+	_, err := c.nonce()
+	return err == nil
+}
+
 // nonce returns the first 16 chars of the id in the "me" cookie.
 func (c *Client) nonce() (string, error) {
 	for _, ck := range c.http.Jar.Cookies(c.cookieURL()) {

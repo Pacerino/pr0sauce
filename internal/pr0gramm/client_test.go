@@ -70,6 +70,17 @@ func TestPostComment_SendsNonceFromMeCookie(t *testing.T) {
 	}
 }
 
+func TestHasSession(t *testing.T) {
+	c, srv := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {})
+	if c.HasSession() {
+		t.Fatal("HasSession true without a me cookie")
+	}
+	setMe(t, c, srv)
+	if !c.HasSession() {
+		t.Fatal("HasSession false with a me cookie")
+	}
+}
+
 func TestPostComment_NoSession(t *testing.T) {
 	c, _ := newTestClient(t, func(w http.ResponseWriter, r *http.Request) { t.Fatal("must not hit server") })
 	if err := c.PostComment(context.Background(), 1, 2, "x"); !errors.Is(err, ErrNoSession) {

@@ -198,14 +198,14 @@ func TestRequestLifecycle(t *testing.T) {
 	if err != nil || len(stale) != 1 || stale[0].Status != "failed" || *stale[0].LastError != "reply state unknown after restart" {
 		t.Fatalf("stale = %+v, %v", stale, err)
 	}
-	unread, err := q.UnreadHandledRequests(ctx)
+	unread, err := q.UnreadHandledRequests(ctx, db.UnreadHandledRequestsParams{Now: time.Now().Add(time.Minute), Lim: 10})
 	if err != nil || len(unread) != 1 {
 		t.Fatalf("unread = %+v, %v", unread, err)
 	}
 	if err := q.SetMarkedRead(ctx, unread[0].ID); err != nil {
 		t.Fatal(err)
 	}
-	if unread, _ = q.UnreadHandledRequests(ctx); len(unread) != 0 {
+	if unread, _ = q.UnreadHandledRequests(ctx, db.UnreadHandledRequestsParams{Now: time.Now().Add(time.Minute), Lim: 10}); len(unread) != 0 {
 		t.Fatalf("unread after mark = %+v", unread)
 	}
 	if n, err := q.SetRequestStatus(ctx, db.SetRequestStatusParams{ID: due[1].ID, Status: "done", ReplyKind: ptr("comment")}); err != nil || n != 1 {

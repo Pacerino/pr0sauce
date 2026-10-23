@@ -24,20 +24,22 @@ type BotState struct {
 }
 
 type Request struct {
-	ID            int64
-	MessageID     int64
-	ItemID        int64
-	Requester     string
-	Thumb         string
-	MentionedAt   time.Time
-	Status        string
-	ReplyKind     *string
-	Attempts      int32
-	NextAttemptAt time.Time
-	LastError     *string
-	MarkedRead    bool
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID               int64
+	MessageID        int64
+	ItemID           int64
+	Requester        string
+	Thumb            string
+	MentionedAt      time.Time
+	Status           string
+	ReplyKind        *string
+	Attempts         int32
+	NextAttemptAt    time.Time
+	LastError        *string
+	MarkedRead       bool
+	MarkReadAttempts int32
+	MarkReadAfter    time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type Song struct {

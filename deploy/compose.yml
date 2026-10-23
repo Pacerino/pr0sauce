@@ -46,6 +46,7 @@ services:
     <<: *go
     command: ["bot"]
     restart: unless-stopped
+    stop_grace_period: 45s
     depends_on:
       migrate:
         condition: service_completed_successfully

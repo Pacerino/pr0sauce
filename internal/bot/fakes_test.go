@@ -35,6 +35,7 @@ type fakePr0 struct {
 	pmErr     func(n int) error
 	tagErr    error
 	markErr   func(messageID int64) error
+	noSession bool // HasSession reports false
 	itemCalls []int64
 	posts     []post // every PostComment attempt, failed or not
 	pms       []pm
@@ -55,6 +56,12 @@ func (f *fakePr0) InboxComments(context.Context) ([]pr0gramm.InboxComment, error
 		return nil, f.inboxErr
 	}
 	return append([]pr0gramm.InboxComment(nil), f.inbox...), nil
+}
+
+func (f *fakePr0) HasSession() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return !f.noSession
 }
 
 func (f *fakePr0) MarkRead(_ context.Context, id int64) error {

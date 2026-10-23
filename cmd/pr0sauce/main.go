@@ -107,12 +107,17 @@ func runBot(ctx context.Context, _ []string) error {
 	return bot.Run(ctx, cfg, log)
 }
 
-func runBotLogin(ctx context.Context, _ []string) error {
+func runBotLogin(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("bot-login", flag.ContinueOnError)
+	captchaOut := fs.String("captcha-out", "", "directory for the captcha image file (default: the OS temp dir)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	cfg, err := loadBotConfig()
 	if err != nil {
 		return err
 	}
-	return bot.LoginInteractive(ctx, cfg, os.Stdin, os.Stdout)
+	return bot.LoginInteractive(ctx, cfg, os.Stdin, os.Stdout, *captchaOut)
 }
 
 func loadBotConfig() (config.Config, error) {

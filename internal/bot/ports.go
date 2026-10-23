@@ -13,6 +13,7 @@ import (
 // Pr0 is the subset of the pr0gramm client the bot uses.
 type Pr0 interface {
 	InboxComments(ctx context.Context) ([]pr0gramm.InboxComment, error)
+	HasSession() bool
 	MarkRead(ctx context.Context, messageID int64) error
 	PostComment(ctx context.Context, itemID, parentID int64, text string) error
 	AddTags(ctx context.Context, itemID int64, tags []string) error
@@ -43,7 +44,8 @@ type Store interface {
 	MarkReplying(ctx context.Context, id int64) (int64, error)
 	RetryFromReplying(ctx context.Context, arg db.RetryFromReplyingParams) (int64, error)
 	FailStaleReplying(ctx context.Context) ([]db.Request, error)
-	UnreadHandledRequests(ctx context.Context) ([]db.Request, error)
+	UnreadHandledRequests(ctx context.Context, arg db.UnreadHandledRequestsParams) ([]db.Request, error)
+	BumpMarkRead(ctx context.Context, arg db.BumpMarkReadParams) (int64, error)
 	SetMarkedRead(ctx context.Context, id int64) error
 	GetState(ctx context.Context, key string) (string, error)
 	SetState(ctx context.Context, arg db.SetStateParams) error

@@ -30,8 +30,28 @@ func (q *Queries) BumpAttempt(ctx context.Context, arg BumpAttemptParams) (int64
 	return result.RowsAffected(), nil
 }
 
+const bumpMarkRead = `-- name: BumpMarkRead :execrows
+update requests
+set mark_read_attempts = mark_read_attempts + 1, mark_read_after = $1::timestamptz, last_error = $2, updated_at = now()
+where id = $3 and marked_read = false
+`
+
+type BumpMarkReadParams struct {
+	MarkReadAfter time.Time
+	LastError     *string
+	ID            int64
+}
+
+func (q *Queries) BumpMarkRead(ctx context.Context, arg BumpMarkReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, bumpMarkRead, arg.MarkReadAfter, arg.LastError, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const dueRequests = `-- name: DueRequests :many
-select id, message_id, item_id, requester, thumb, mentioned_at, status, reply_kind, attempts, next_attempt_at, last_error, marked_read, created_at, updated_at from requests
+select id, message_id, item_id, requester, thumb, mentioned_at, status, reply_kind, attempts, next_attempt_at, last_error, marked_read, mark_read_attempts, mark_read_after, created_at, updated_at from requests
 where status = 'pending' and next_attempt_at <= $1::timestamptz
 order by id
 limit $2::int
@@ -64,6 +84,8 @@ func (q *Queries) DueRequests(ctx context.Context, arg DueRequestsParams) ([]Req
 			&i.NextAttemptAt,
 			&i.LastError,
 			&i.MarkedRead,
+			&i.MarkReadAttempts,
+			&i.MarkReadAfter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -81,7 +103,7 @@ const failStaleReplying = `-- name: FailStaleReplying :many
 update requests
 set status = 'failed', last_error = 'reply state unknown after restart', updated_at = now()
 where status = 'replying'
-returning id, message_id, item_id, requester, thumb, mentioned_at, status, reply_kind, attempts, next_attempt_at, last_error, marked_read, created_at, updated_at
+returning id, message_id, item_id, requester, thumb, mentioned_at, status, reply_kind, attempts, next_attempt_at, last_error, marked_read, mark_read_attempts, mark_read_after, created_at, updated_at
 `
 
 func (q *Queries) FailStaleReplying(ctx context.Context) ([]Request, error) {
@@ -106,6 +128,8 @@ func (q *Queries) FailStaleReplying(ctx context.Context) ([]Request, error) {
 			&i.NextAttemptAt,
 			&i.LastError,
 			&i.MarkedRead,
+			&i.MarkReadAttempts,
+			&i.MarkReadAfter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -229,13 +253,20 @@ func (q *Queries) SetRequestStatus(ctx context.Context, arg SetRequestStatusPara
 }
 
 const unreadHandledRequests = `-- name: UnreadHandledRequests :many
-select id, message_id, item_id, requester, thumb, mentioned_at, status, reply_kind, attempts, next_attempt_at, last_error, marked_read, created_at, updated_at from requests
+select id, message_id, item_id, requester, thumb, mentioned_at, status, reply_kind, attempts, next_attempt_at, last_error, marked_read, mark_read_attempts, mark_read_after, created_at, updated_at from requests
 where status in ('done', 'skipped', 'failed') and marked_read = false
+  and mark_read_after <= $1::timestamptz
 order by id
+limit $2::int
 `
 
-func (q *Queries) UnreadHandledRequests(ctx context.Context) ([]Request, error) {
-	rows, err := q.db.Query(ctx, unreadHandledRequests)
+type UnreadHandledRequestsParams struct {
+	Now time.Time
+	Lim int32
+}
+
+func (q *Queries) UnreadHandledRequests(ctx context.Context, arg UnreadHandledRequestsParams) ([]Request, error) {
+	rows, err := q.db.Query(ctx, unreadHandledRequests, arg.Now, arg.Lim)
 	if err != nil {
 		return nil, err
 	}
@@ -256,6 +287,8 @@ func (q *Queries) UnreadHandledRequests(ctx context.Context) ([]Request, error) 
 			&i.NextAttemptAt,
 			&i.LastError,
 			&i.MarkedRead,
+			&i.MarkReadAttempts,
+			&i.MarkReadAfter,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {

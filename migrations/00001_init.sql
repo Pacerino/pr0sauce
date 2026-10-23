@@ -29,6 +29,8 @@ create table requests (
   next_attempt_at timestamptz not null default now(),
   last_error     text,
   marked_read    boolean not null default false,
+  mark_read_attempts int not null default 0,
+  mark_read_after    timestamptz not null default now(),
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now()
 );

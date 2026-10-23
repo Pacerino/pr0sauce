@@ -36,7 +36,7 @@ const (
 	defaultBackoffMin = 30 * time.Second // re-check while the session is unknown
 	defaultBackoffMax = 10 * time.Minute
 
-	loginHint = "pr0gramm session invalid — run: docker compose run --rm -it bot bot-login"
+	loginHint = "pr0gramm session invalid — run: docker compose -p pr0sauce2 -f /opt/pr0sauce/v2/compose.yml run --rm -it bot bot-login --captcha-out /tmp"
 )
 
 // session is the part of the pr0gramm client the session handling needs.
@@ -288,7 +288,7 @@ func (r *runner) setUnknown(cause error) {
 	}
 	r.health.setSession(sessionUnknown)
 	r.nextCheck = r.clock.Now().Add(r.backoff)
-	r.log.Warn("pr0gramm session state unknown, will re-check", "err", cause, "in", r.backoff)
+	logAPIErr(r.log, "pr0gramm session state unknown, will re-check", cause, "in", r.backoff)
 }
 
 // tick runs one poll round, or a session re-check when the session is not ok.
@@ -343,12 +343,12 @@ func (r *runner) stepFailed(ctx context.Context, step string, err error) (stop b
 		r.log.Error("step failed", "step", step, "err", err)
 		return false
 	}
-	r.log.Warn("pr0gramm auth error, checking session", "step", step, "err", err)
+	logAPIErr(r.log, "pr0gramm auth error, checking session", err, "step", step)
 	first := r.checked == nil
 	valid, cerr := r.checkSession(ctx)
 	switch {
 	case cerr != nil:
-		r.log.Warn("session check failed, continuing", "err", cerr)
+		logAPIErr(r.log, "session check failed, continuing", cerr)
 		return false
 	case valid:
 		return false
@@ -375,7 +375,7 @@ func (r *runner) recheckSession(ctx context.Context) {
 		r.setUnknown(err)
 	case err != nil:
 		r.nextCheck = r.clock.Now().Add(r.recheck)
-		r.log.Warn("session re-check failed, still invalid", "err", err)
+		logAPIErr(r.log, "session re-check failed, still invalid", err)
 	case valid:
 		r.setOK()
 	case r.startupUnknown && !r.loginUsed:
@@ -389,28 +389,32 @@ func (r *runner) recheckSession(ctx context.Context) {
 }
 
 // LoginInteractive logs in with a captcha the operator solves, and persists
-// the session cookies so a running bot picks them up.
-func LoginInteractive(ctx context.Context, cfg config.Config, in io.Reader, out io.Writer) error {
+// the session cookies so a running bot picks them up. A non-empty captchaDir
+// receives the captcha image file instead of os.TempDir.
+func LoginInteractive(ctx context.Context, cfg config.Config, in io.Reader, out io.Writer, captchaDir string) error {
 	pool, err := db.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer pool.Close()
-	return loginInteractive(ctx, cfg, pr0gramm.New(nil, cfg.Pr0BaseURL), NewStore(db.New(pool)), in, out)
+	return loginInteractive(ctx, cfg, pr0gramm.New(nil, cfg.Pr0BaseURL), NewStore(db.New(pool)), in, out, captchaDir)
 }
 
-func loginInteractive(ctx context.Context, cfg config.Config, sess session, store Store, in io.Reader, out io.Writer) error {
+func loginInteractive(ctx context.Context, cfg config.Config, sess session, store Store, in io.Reader, out io.Writer, captchaDir string) error {
 	c, err := sess.Captcha(ctx)
 	if err != nil {
 		return fmt.Errorf("bot: captcha: %w", err)
 	}
 	img := c.ImageURL
 	if strings.HasPrefix(img, "data:") {
-		path, err := saveDataURI(img)
+		path, err := saveDataURI(img, captchaDir)
 		if err != nil {
 			return fmt.Errorf("bot: save captcha image: %w", err)
 		}
-		fmt.Fprintf(out, "Captcha image saved to: %s\nCaptcha text: ", path)
+		// The container's temp dir is rarely reachable from the operator's
+		// shell, so the image is also printed as a pasteable data URI.
+		fmt.Fprintf(out, "Captcha image saved to: %s\n", path)
+		fmt.Fprintf(out, "Captcha (in die Browser-Adresszeile kopieren / paste into browser address bar):\n%s\nCaptcha text: ", img)
 	} else {
 		fmt.Fprintf(out, "Captcha image: %s\nCaptcha text: ", img)
 	}
@@ -432,8 +436,9 @@ func loginInteractive(ctx context.Context, cfg config.Config, sess session, stor
 	return nil
 }
 
-// saveDataURI decodes a data: URI into a temp file and returns its path.
-func saveDataURI(uri string) (string, error) {
+// saveDataURI decodes a data: URI into a file in dir (os.TempDir when empty)
+// and returns its path.
+func saveDataURI(uri, dir string) (string, error) {
 	meta, payload, ok := strings.Cut(strings.TrimPrefix(uri, "data:"), ",")
 	if !ok {
 		return "", errors.New("malformed data URI")
@@ -463,7 +468,7 @@ func saveDataURI(uri string) (string, error) {
 	case "image/svg+xml":
 		ext = ".svg"
 	}
-	f, err := os.CreateTemp("", "pr0sauce-captcha-*"+ext)
+	f, err := os.CreateTemp(dir, "pr0sauce-captcha-*"+ext)
 	if err != nil {
 		return "", err
 	}

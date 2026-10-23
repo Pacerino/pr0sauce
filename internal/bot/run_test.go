@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -405,12 +406,15 @@ func TestLoginInteractive_SavesCookies(t *testing.T) {
 
 	t.Setenv("TMPDIR", t.TempDir())
 	var out bytes.Buffer
-	err := loginInteractive(context.Background(), cfg, pr0gramm.New(nil, srv.URL), store, strings.NewReader("xK7p\n"), &out)
+	err := loginInteractive(context.Background(), cfg, pr0gramm.New(nil, srv.URL), store, strings.NewReader("xK7p\n"), &out, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(out.String(), "base64") {
-		t.Errorf("output contains the data URI blob: %q", out.String())
+	if !regexp.MustCompile(`(?m)^data:image/png;base64,\S+$`).MatchString(out.String()) {
+		t.Errorf("output lacks the data URI on its own line: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "Captcha (in die Browser-Adresszeile kopieren / paste into browser address bar):") {
+		t.Errorf("output lacks the paste hint: %q", out.String())
 	}
 	path := captchaPath(t, out.String())
 	if !strings.HasSuffix(path, ".png") || !strings.Contains(path, "pr0sauce-captcha-") {
@@ -434,6 +438,36 @@ func TestLoginInteractive_SavesCookies(t *testing.T) {
 	v, err := store.GetState(context.Background(), sessionCookiesKey)
 	if err != nil || !strings.Contains(v, `"good"`) {
 		t.Errorf("saved cookies = %q, %v", v, err)
+	}
+}
+
+func TestLoginHint_TargetsV2Stack(t *testing.T) {
+	want := "pr0gramm session invalid — run: docker compose -p pr0sauce2 -f /opt/pr0sauce/v2/compose.yml run --rm -it bot bot-login --captcha-out /tmp"
+	if loginHint != want {
+		t.Errorf("loginHint = %q", loginHint)
+	}
+}
+
+func TestLoginInteractive_CaptchaOutDir(t *testing.T) {
+	pool := testdb.New(t)
+	srv := newFakeServer(t)
+	srv.set(func() { srv.loginOK = true })
+	dir := t.TempDir()
+	var out bytes.Buffer
+	err := loginInteractive(context.Background(), config.Config{Pr0User: "bot", Pr0Password: "s3cret"},
+		pr0gramm.New(nil, srv.URL), NewStore(db.New(pool)), strings.NewReader("xK7p\n"), &out, dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := captchaPath(t, out.String())
+	if filepath.Dir(path) != dir {
+		t.Errorf("captcha file %q not in %q", path, dir)
+	}
+	if b, err := os.ReadFile(path); err != nil || !bytes.Equal(b, []byte{0, 0, 0}) {
+		t.Errorf("captcha file = %v, %v", b, err)
+	}
+	if !strings.Contains(out.String(), "data:image/png;base64,") {
+		t.Errorf("data URI missing with --captcha-out: %q", out.String())
 	}
 }
 
@@ -499,7 +533,7 @@ func TestLoginInteractive_PrintsPlainURLAsIs(t *testing.T) {
 	srv.set(func() { srv.loginOK, srv.captcha = true, "https://example.invalid/captcha/1.png" })
 	var out bytes.Buffer
 	err := loginInteractive(context.Background(), config.Config{Pr0User: "bot", Pr0Password: "s3cret"},
-		pr0gramm.New(nil, srv.URL), NewStore(db.New(pool)), strings.NewReader("abc\n"), &out)
+		pr0gramm.New(nil, srv.URL), NewStore(db.New(pool)), strings.NewReader("abc\n"), &out, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,7 +609,10 @@ func TestRun_PersistsRotatedCookies(t *testing.T) {
 
 func TestRun_OneSessionCheckPerTick(t *testing.T) {
 	h := newHarness(t, nil)
-	if err := h.store.SetState(context.Background(), db.SetStateParams{Key: sessionCookiesKey, Value: cookiesJSON("good")}); err != nil {
+	// A cookie that carries a nonce, so ProcessDue gets past its HasSession check.
+	const me = "%7B%22id%22%3A%220123456789abcdef0%22%7D"
+	h.srv.set(func() { h.srv.goodCookie = me })
+	if err := h.store.SetState(context.Background(), db.SetStateParams{Key: sessionCookiesKey, Value: cookiesJSON(me)}); err != nil {
 		t.Fatal(err)
 	}
 	h.start(t)

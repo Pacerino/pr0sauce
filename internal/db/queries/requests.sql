@@ -47,7 +47,14 @@ returning *;
 -- name: UnreadHandledRequests :many
 select * from requests
 where status in ('done', 'skipped', 'failed') and marked_read = false
-order by id;
+  and mark_read_after <= sqlc.arg(now)::timestamptz
+order by id
+limit sqlc.arg(lim)::int;
+
+-- name: BumpMarkRead :execrows
+update requests
+set mark_read_attempts = mark_read_attempts + 1, mark_read_after = sqlc.arg(mark_read_after)::timestamptz, last_error = sqlc.arg(last_error), updated_at = now()
+where id = sqlc.arg(id) and marked_read = false;
 
 -- name: SetMarkedRead :exec
 update requests set marked_read = true, updated_at = now() where id = $1;

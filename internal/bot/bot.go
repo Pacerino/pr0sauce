@@ -44,9 +44,15 @@ var ErrAuth = errors.New("bot: pr0gramm auth error")
 
 const (
 	liveSinceKey = "live_since"
-	batchSize    = 10
-	baseBackoff  = time.Minute
-	maxBackoff   = time.Hour
+	batchSize    = 5
+
+	markReadBatch       = 10 // MarkRead calls per tick
+	markReadBaseBackoff = 30 * time.Second
+	markReadMaxBackoff  = time.Hour
+	markReadMaxAttempts = 8
+	markReadGiveUp      = 100 * 365 * 24 * time.Hour
+	baseBackoff         = time.Minute
+	maxBackoff          = time.Hour
 
 	statusPending = "pending"
 	statusDone    = "done"
@@ -170,13 +176,18 @@ func (b *Bot) liveSince(ctx context.Context, now time.Time) (time.Time, error) {
 	return ls, nil
 }
 
-// ProcessDue handles up to 10 due requests, one after another. It returns an
+// ProcessDue handles up to 5 due requests, one after another. It returns an
 // ErrAuth-wrapped error as soon as pr0gramm rejects the session, and a plain
 // error when the store fails; per-request failures are recorded, not returned.
 func (b *Bot) ProcessDue(ctx context.Context) error {
 	due, err := b.store.DueRequests(ctx, db.DueRequestsParams{Now: b.clock.Now(), Lim: batchSize})
 	if err != nil {
 		return fmt.Errorf("bot: due requests: %w", err)
+	}
+	// Without a session nonce every reply would fail after the claim and be
+	// left failed for good. Report it up front; the requests stay pending.
+	if len(due) > 0 && !b.pr0.HasSession() {
+		return fmt.Errorf("%w: process: %w", ErrAuth, pr0gramm.ErrNoSession)
 	}
 	for _, r := range due {
 		if err := ctx.Err(); err != nil {
@@ -327,7 +338,7 @@ func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db
 		if err := b.finish(ctx, log, r, statusFailed, nil, kind+": "+postErr.Error()); err != nil {
 			return false, err
 		}
-		if pr0gramm.IsAuthError(postErr) {
+		if pr0gramm.IsAuthError(postErr) || errors.Is(postErr, pr0gramm.ErrNoSession) {
 			return false, b.pr0Err(kind, postErr)
 		}
 		return false, nil
@@ -337,7 +348,7 @@ func (b *Bot) reply(ctx context.Context, log *slog.Logger, r db.Request, song db
 	if asComment && song.Title != nil {
 		title, artist := deref(song.Title), deref(song.Artist)
 		if err := b.pr0.AddTags(ctx, r.ItemID, []string{title, artist, artist + " - " + title}); err != nil {
-			log.Warn("adding tags failed, reply counts as done", "err", err)
+			logAPIErr(log, "adding tags failed, reply counts as done", err)
 			if pr0gramm.IsAuthError(err) {
 				authErr = b.pr0Err("tags", err)
 			}
@@ -367,7 +378,7 @@ func (b *Bot) retry(ctx context.Context, log *slog.Logger, r db.Request, cause e
 		log.Error("giving up after max attempts", "attempts", attempts, "err", cause)
 		return b.finish(ctx, log, r, statusFailed, nil, msg)
 	}
-	log.Warn("transient error, will retry", "attempts", attempts, "next_attempt_at", next, "err", cause)
+	logAPIErr(log, "transient error, will retry", cause, "attempts", attempts, "next_attempt_at", next)
 	return nil
 }
 
@@ -393,7 +404,7 @@ func (b *Bot) retryFromReplying(ctx context.Context, log *slog.Logger, r db.Requ
 		log.Error("reply rejected, giving up after max attempts", "attempts", attempts, "err", cause)
 		return b.finish(ctx, log, r, statusFailed, nil, msg)
 	}
-	log.Warn("reply rejected by pr0gramm, will retry", "attempts", attempts, "next_attempt_at", next, "err", cause)
+	logAPIErr(log, "reply rejected by pr0gramm, will retry", cause, "attempts", attempts, "next_attempt_at", next)
 	return nil
 }
 
@@ -420,19 +431,24 @@ func (b *Bot) finish(ctx context.Context, log *slog.Logger, r db.Request, status
 	return nil
 }
 
-// MarkHandledRead marks every finished request read on pr0gramm. Per-message
-// errors are logged and retried next tick; an auth error stops the run.
+// MarkHandledRead marks finished requests read on pr0gramm, at most
+// markReadBatch per call. A failed MarkRead backs off (30s x 2^(n-1), capped at
+// 1h) and is given up on after markReadMaxAttempts; the database stays the
+// source of truth, so delivery is unaffected. An auth error stops the run.
 func (b *Bot) MarkHandledRead(ctx context.Context) error {
-	reqs, err := b.store.UnreadHandledRequests(ctx)
+	now := b.clock.Now()
+	reqs, err := b.store.UnreadHandledRequests(ctx, db.UnreadHandledRequestsParams{Now: now, Lim: markReadBatch})
 	if err != nil {
 		return fmt.Errorf("bot: unread handled requests: %w", err)
 	}
 	for _, r := range reqs {
 		if err := b.pr0.MarkRead(ctx, r.MessageID); err != nil {
-			if pr0gramm.IsAuthError(err) {
+			if errors.Is(err, pr0gramm.ErrNoSession) || pr0gramm.IsAuthError(err) {
 				return b.pr0Err("mark read", err)
 			}
-			b.log.Warn("mark read failed, retrying next tick", "request", r.ID, "message", r.MessageID, "err", err)
+			if err := b.markReadFailed(ctx, r, err); err != nil {
+				return err
+			}
 			continue
 		}
 		if err := b.store.SetMarkedRead(ctx, r.ID); err != nil {
@@ -440,6 +456,50 @@ func (b *Bot) MarkHandledRead(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// markReadFailed records a failed MarkRead and schedules the next try.
+func (b *Bot) markReadFailed(ctx context.Context, r db.Request, cause error) error {
+	attempts := int(r.MarkReadAttempts) + 1
+	after := b.clock.Now().Add(markReadBackoff(attempts))
+	giveUp := attempts >= markReadMaxAttempts
+	if giveUp {
+		after = b.clock.Now().Add(markReadGiveUp)
+	}
+	msg := "mark read: " + cause.Error()
+	if _, err := b.store.BumpMarkRead(ctx, db.BumpMarkReadParams{ID: r.ID, MarkReadAfter: after, LastError: &msg}); err != nil {
+		return fmt.Errorf("bot: bump mark read %d: %w", r.ID, err)
+	}
+	if giveUp {
+		b.log.Error("mark read failed, giving up (delivery is unaffected)",
+			"request", r.ID, "message", r.MessageID, "attempts", attempts, "err", cause)
+		return nil
+	}
+	logAPIErr(b.log, "mark read failed, will retry", cause,
+		"request", r.ID, "message", r.MessageID, "attempts", attempts, "next_try", after)
+	return nil
+}
+
+// markReadBackoff is 30s x 2^(attempts-1), capped at 1h.
+func markReadBackoff(attempts int) time.Duration {
+	if attempts < 1 {
+		attempts = 1
+	}
+	if attempts > 8 {
+		return markReadMaxBackoff
+	}
+	return min(markReadBaseBackoff<<(attempts-1), markReadMaxBackoff)
+}
+
+// logAPIErr logs a pr0gramm *APIError at ERROR with path and status, anything
+// else at WARN.
+func logAPIErr(log *slog.Logger, msg string, err error, args ...any) {
+	var ae *pr0gramm.APIError
+	if errors.As(err, &ae) {
+		log.Error(msg, append(args, "path", ae.Path, "status", ae.Status, "err", err)...)
+		return
+	}
+	log.Warn(msg, append(args, "err", err)...)
 }
 
 // RecoverReplying fails every request a previous run left in replying. Call
@@ -458,7 +518,7 @@ func (b *Bot) RecoverReplying(ctx context.Context) error {
 }
 
 func (b *Bot) pr0Err(op string, err error) error {
-	if pr0gramm.IsAuthError(err) {
+	if pr0gramm.IsAuthError(err) || errors.Is(err, pr0gramm.ErrNoSession) {
 		return fmt.Errorf("%w: %s: %w", ErrAuth, op, err)
 	}
 	return fmt.Errorf("bot: %s: %w", op, err)
