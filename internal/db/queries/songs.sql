@@ -23,5 +23,5 @@ limit sqlc.arg(lim)::int;
 select * from songs
 where title is not null
   and (title ilike sqlc.arg(pattern)::text escape '\' or artist ilike sqlc.arg(pattern)::text escape '\')
-order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), sqlc.arg(q)::text) desc, recognized_at desc
+order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), sqlc.arg(q)::text) desc, recognized_at desc, item_id desc
 limit sqlc.arg(lim)::int offset sqlc.arg(off)::int;

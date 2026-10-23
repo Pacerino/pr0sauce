@@ -84,7 +84,7 @@ const searchSongs = `-- name: SearchSongs :many
 select item_id, title, artist, album, provider, spotify_url, spotify_id, youtube_url, youtube_id, cover_url, recognized_at from songs
 where title is not null
   and (title ilike $1::text escape '\' or artist ilike $1::text escape '\')
-order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), $2::text) desc, recognized_at desc
+order by similarity(coalesce(title,'') || ' ' || coalesce(artist,''), $2::text) desc, recognized_at desc, item_id desc
 limit $4::int offset $3::int
 `
 

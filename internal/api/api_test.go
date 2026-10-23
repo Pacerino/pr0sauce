@@ -458,3 +458,40 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("code %d", code)
 	}
 }
+
+func TestSearch_PaginationStableOnTies(t *testing.T) {
+	s, q := setup(t)
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	for i := int64(1); i <= 5; i++ {
+		seed(t, q, i, str("Same"), str("Same"), at)
+	}
+	var got []int64
+	path := "/api/songs?q=same&limit=2"
+	for page := 0; page < 10; page++ {
+		r := getList(t, s, path, 200)
+		got = append(got, ids(r)...)
+		if r.NextCursor == nil {
+			break
+		}
+		path = "/api/songs?q=same&limit=2&cursor=" + url.QueryEscape(*r.NextCursor)
+	}
+	if fmt.Sprint(got) != "[5 4 3 2 1]" {
+		t.Fatalf("got %v", got)
+	}
+}
+
+func TestSearch_QueryLengthCap(t *testing.T) {
+	s, _ := setup(t)
+	ok := strings.Repeat("я", 200)
+	if code, _, _ := get(t, s, "/api/songs?q="+url.QueryEscape(ok)); code != 200 {
+		t.Fatalf("200 runes = %d", code)
+	}
+	code, _, body := get(t, s, "/api/songs?q="+url.QueryEscape(ok+"x"))
+	if code != 400 || !strings.Contains(string(body), "q too long") {
+		t.Fatalf("201 runes = %d %s", code, body)
+	}
+	// whitespace is trimmed before counting
+	if code, _, _ := get(t, s, "/api/songs?q="+url.QueryEscape("  "+ok+"  ")); code != 200 {
+		t.Fatalf("padded = %d", code)
+	}
+}

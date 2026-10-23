@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Pacerino/pr0sauce/internal/db"
 	"github.com/jackc/pgx/v5"
@@ -17,6 +18,8 @@ import (
 const (
 	defaultLimit = 20
 	maxLimit     = 50
+
+	maxQueryRunes = 200
 )
 
 var itemIDRe = regexp.MustCompile(`^[1-9][0-9]{0,18}$`)
@@ -103,7 +106,11 @@ func (s *server) listSongs(w http.ResponseWriter, r *http.Request) {
 		}
 		limit = int32(n)
 	}
-	q := qs.Get("q")
+	q := strings.TrimSpace(qs.Get("q"))
+	if utf8.RuneCountInString(q) > maxQueryRunes {
+		writeError(w, http.StatusBadRequest, "q too long")
+		return
+	}
 	cursor := qs.Get("cursor")
 
 	var kind string
