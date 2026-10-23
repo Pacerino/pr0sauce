@@ -3,8 +3,9 @@ import { notFound } from "next/navigation";
 import { cache } from "react";
 import { Cover } from "@/components/Cover";
 import { api } from "@/lib/api";
-import { formatDateDe, providerLabel, safeHttpUrl } from "@/lib/format";
+import { formatDateDe, providerLabel } from "@/lib/format";
 import { parseItemId } from "@/lib/ids";
+import { buttonClass, streamingButtons } from "@/lib/links";
 
 export const dynamic = "force-dynamic";
 
@@ -26,9 +27,6 @@ export default async function SongPage({ params }: Props) {
   const song = await getSong(id);
   if (!song) notFound();
 
-  const spotify = safeHttpUrl(song.spotifyUrl);
-  const youtube = safeHttpUrl(song.youtubeUrl);
-
   return (
     <article>
       <div className="flex flex-wrap gap-3.5">
@@ -47,27 +45,18 @@ export default async function SongPage({ params }: Props) {
               {formatDateDe(song.recognizedAt)}
             </span>
           </div>
-          <div className="flex gap-1.5">
-            {spotify && (
+          <div className="flex flex-wrap gap-2">
+            {streamingButtons(song).map((b) => (
               <a
-                href={spotify}
+                key={b.kind}
+                href={b.href}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="rounded bg-[#1db954] px-2.5 py-1.5 text-xs text-white"
+                className={`rounded px-2.5 py-1.5 text-xs ${buttonClass[b.kind]}`}
               >
-                Spotify
+                {b.label}
               </a>
-            )}
-            {youtube && (
-              <a
-                href={youtube}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="rounded bg-[#e62117] px-2.5 py-1.5 text-xs text-white"
-              >
-                YouTube
-              </a>
-            )}
+            ))}
           </div>
         </div>
       </div>

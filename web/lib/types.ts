@@ -14,6 +14,11 @@ export type Song = {
   provider: string;
   spotifyUrl: string | null;
   youtubeUrl: string | null;
+  appleMusicUrl: string | null;
+  deezerUrl: string | null;
+  songLinkUrl: string | null;
+  spotifySearchUrl: string | null;
+  youtubeSearchUrl: string | null;
   coverUrl: string | null;
   /** RFC 3339 (UTC) */
   recognizedAt: string;
