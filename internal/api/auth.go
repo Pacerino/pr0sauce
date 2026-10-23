@@ -108,14 +108,22 @@ func isWrite(r *http.Request) bool {
 
 // requireUser needs a valid session. Banned users may read but any write is 403.
 func (s *server) requireUser(h func(http.ResponseWriter, *http.Request, db.User)) http.HandlerFunc {
+	return s.requireSession(func(w http.ResponseWriter, r *http.Request, u db.User) {
+		if u.BannedAt != nil && isWrite(r) {
+			writeError(w, http.StatusForbidden, "Gesperrt")
+			return
+		}
+		h(w, r, u)
+	})
+}
+
+// requireSession needs a valid session and does not apply the ban gate; only
+// for actions a banned user must keep, such as logging out.
+func (s *server) requireSession(h func(http.ResponseWriter, *http.Request, db.User)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		sess := sessionFrom(r.Context())
 		if sess.user == nil {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
-			return
-		}
-		if sess.user.BannedAt != nil && isWrite(r) {
-			writeError(w, http.StatusForbidden, "Gesperrt")
 			return
 		}
 		h(w, r, *sess.user)
@@ -220,12 +228,13 @@ func (s *server) deleteSession(w http.ResponseWriter, r *http.Request, _ db.User
 }
 
 func (s *server) me(w http.ResponseWriter, r *http.Request, u db.User) {
-	// Sliding expiry: one conditional statement, so no read-modify-write race.
+	// Sliding expiry: one conditional statement (live sessions under the
+	// refresh threshold only), so no read-modify-write race.
 	now := s.now()
-	_, err := s.pool.Exec(r.Context(),
-		`update sessions set expires_at = $2 where token_hash = $1 and expires_at < $3`,
-		sessionFrom(r.Context()).hash, now.Add(sessionTTL), now.Add(sessionRefresh))
-	if err != nil {
+	if _, err := s.q.TouchSession(r.Context(), db.TouchSessionParams{
+		NewExpires: now.Add(sessionTTL), TokenHash: sessionFrom(r.Context()).hash,
+		Now: now, RefreshBefore: now.Add(sessionRefresh),
+	}); err != nil {
 		s.log.Warn("session touch failed", "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

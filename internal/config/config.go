@@ -45,7 +45,7 @@ func Load(getenv func(string) string) (Config, error) {
 		APIAddr:           def(getenv("API_ADDR"), ":8080"),
 		PublicBaseURL:     def(getenv("PUBLIC_BASE_URL"), "https://pr0sauce.info"),
 		Pr0BaseURL:        getenv("PR0_BASE_URL"),
-		InternalAPIToken:  getenv("INTERNAL_API_TOKEN"),
+		InternalAPIToken:  strings.TrimSpace(getenv("INTERNAL_API_TOKEN")),
 		AdminName:         strings.TrimSpace(getenv("ADMIN_PR0_NAME")),
 		BotHealthURL:      getenv("BOT_HEALTH_URL"),
 	}
@@ -92,9 +92,17 @@ func (c Config) RequireBot() error {
 		"PR0_USER", "PR0_PASSWORD")
 }
 
+const minInternalTokenLen = 32
+
 // RequireAPI checks the variables the api command needs.
 func (c Config) RequireAPI() error {
-	return missing(map[string]string{"INTERNAL_API_TOKEN": c.InternalAPIToken}, "INTERNAL_API_TOKEN")
+	if err := missing(map[string]string{"INTERNAL_API_TOKEN": c.InternalAPIToken}, "INTERNAL_API_TOKEN"); err != nil {
+		return err
+	}
+	if len(c.InternalAPIToken) < minInternalTokenLen {
+		return fmt.Errorf("config: INTERNAL_API_TOKEN must be at least %d characters", minInternalTokenLen)
+	}
+	return nil
 }
 
 // RequireLegacy checks the variables import-legacy needs.

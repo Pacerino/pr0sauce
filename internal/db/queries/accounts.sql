@@ -34,8 +34,11 @@ insert into sessions (token_hash, user_id, expires_at) values ($1, $2, $3);
 select u.* from sessions s join users u on u.id = s.user_id
 where s.token_hash = $1 and s.expires_at > sqlc.arg(now)::timestamptz;
 
--- name: TouchSession :exec
-update sessions set expires_at = $2 where token_hash = $1;
+-- name: TouchSession :execrows
+update sessions set expires_at = sqlc.arg(new_expires)
+where token_hash = sqlc.arg(token_hash)
+  and expires_at > sqlc.arg(now)
+  and expires_at < sqlc.arg(refresh_before);
 
 -- name: DeleteSession :exec
 delete from sessions where token_hash = $1;

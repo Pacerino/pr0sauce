@@ -214,18 +214,31 @@ func (q *Queries) SetRole(ctx context.Context, arg SetRoleParams) error {
 	return err
 }
 
-const touchSession = `-- name: TouchSession :exec
-update sessions set expires_at = $2 where token_hash = $1
+const touchSession = `-- name: TouchSession :execrows
+update sessions set expires_at = $1
+where token_hash = $2
+  and expires_at > $3
+  and expires_at < $4
 `
 
 type TouchSessionParams struct {
-	TokenHash []byte
-	ExpiresAt time.Time
+	NewExpires    time.Time
+	TokenHash     []byte
+	Now           time.Time
+	RefreshBefore time.Time
 }
 
-func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) error {
-	_, err := q.db.Exec(ctx, touchSession, arg.TokenHash, arg.ExpiresAt)
-	return err
+func (q *Queries) TouchSession(ctx context.Context, arg TouchSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, touchSession,
+		arg.NewExpires,
+		arg.TokenHash,
+		arg.Now,
+		arg.RefreshBefore,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const upsertUserLogin = `-- name: UpsertUserLogin :one

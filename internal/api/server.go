@@ -64,7 +64,7 @@ func newServer(q *db.Queries, pool *pgxpool.Pool, log *slog.Logger, opts Options
 	s.mux.HandleFunc("GET /api/stats", s.stats)
 	s.mux.HandleFunc("GET /healthz", s.healthz)
 	s.mux.Handle("POST /api/internal/sessions", s.internal(http.HandlerFunc(s.createSession)))
-	s.mux.Handle("DELETE /api/internal/sessions", s.internal(s.requireUser(s.deleteSession)))
+	s.mux.Handle("DELETE /api/internal/sessions", s.internal(s.requireSession(s.deleteSession)))
 	s.mux.Handle("GET /api/internal/me", s.internal(s.requireUser(s.me)))
 	return s
 }

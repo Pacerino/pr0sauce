@@ -166,7 +166,21 @@ func TestRequireAPI_And_AccountVars(t *testing.T) {
 		t.Errorf("RequireAPI = %v", err)
 	}
 	cfg.InternalAPIToken = "x"
+	if err := cfg.RequireAPI(); err == nil || !strings.Contains(err.Error(), "INTERNAL_API_TOKEN") {
+		t.Errorf("short token RequireAPI = %v", err)
+	}
+	cfg.InternalAPIToken = strings.Repeat("a", 32)
 	if err := cfg.RequireAPI(); err != nil {
 		t.Errorf("RequireAPI = %v", err)
+	}
+}
+
+func TestLoad_TrimsInternalToken(t *testing.T) {
+	cfg, err := Load(env(map[string]string{"DATABASE_URL": "x", "INTERNAL_API_TOKEN": "  " + strings.Repeat("b", 31) + " \n"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.InternalAPIToken != strings.Repeat("b", 31) || cfg.RequireAPI() == nil {
+		t.Errorf("token = %q, RequireAPI = %v", cfg.InternalAPIToken, cfg.RequireAPI())
 	}
 }

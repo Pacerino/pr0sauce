@@ -3,10 +3,12 @@ package api
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/Pacerino/pr0sauce/internal/db"
 	"github.com/Pacerino/pr0sauce/internal/pr0gramm"
+	"github.com/jackc/pgx/v5"
 )
 
 // Pr0Lookup resolves a pr0gramm user name to its profile.
@@ -32,10 +34,15 @@ type DBPr0Lookup struct {
 func (l DBPr0Lookup) ProfileInfo(ctx context.Context, name string) (pr0gramm.Profile, error) {
 	c := pr0gramm.New(l.Client, l.BaseURL)
 	v, err := l.Q.GetState(ctx, sessionCookiesKey)
-	if err == nil {
+	switch {
+	case err == nil:
 		if err := c.ImportCookies([]byte(v)); err != nil {
 			return pr0gramm.Profile{}, errors.New("api: stored pr0gramm cookies unreadable")
 		}
+	case errors.Is(err, pgx.ErrNoRows):
+		// no stored session: lookups work anonymously
+	default:
+		return pr0gramm.Profile{}, fmt.Errorf("api: reading session cookies: %w", err)
 	}
 	return c.ProfileInfo(ctx, name)
 }

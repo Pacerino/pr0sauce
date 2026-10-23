@@ -126,6 +126,12 @@ func TestAuthz_Matrix(t *testing.T) {
 	if !strings.Contains(string(body), `"Gesperrt"`) {
 		t.Errorf("banned body = %s", body)
 	}
+	if code, _ := do(t, s, "DELETE", "/api/internal/sessions", testToken, banned.Token, nil); code != 204 {
+		t.Errorf("banned logout = %d, want 204", code)
+	}
+	if code, _ := do(t, s, "GET", "/api/internal/me", testToken, banned.Token, nil); code != 401 {
+		t.Errorf("banned session after logout = %d, want 401", code)
+	}
 	// 401 bodies are identical whichever credential is wrong.
 	_, b1 := do(t, s, "GET", "/api/internal/me", "nope", user.Token, nil)
 	_, b2 := do(t, s, "GET", "/api/internal/me", testToken, "bogus", nil)
@@ -186,7 +192,6 @@ func TestSessions_SlidingExpiry(t *testing.T) {
 		}
 		return e
 	}
-	_ = q
 	set := func(d time.Duration) {
 		if _, err := s.pool.Exec(context.Background(), `update sessions set expires_at=$2 where token_hash=$1`, hash, time.Now().Add(d)); err != nil {
 			t.Fatal(err)
@@ -202,6 +207,14 @@ func TestSessions_SlidingExpiry(t *testing.T) {
 	do(t, s, "GET", "/api/internal/me", testToken, l.Token, nil)
 	if d := time.Until(expiry()); d < 29*24*time.Hour {
 		t.Errorf("session with 10d left not extended: %v", d)
+	}
+	// An already-expired session is never revived by a touch.
+	set(-time.Hour)
+	before = expiry()
+	n, err := q.TouchSession(context.Background(), db.TouchSessionParams{
+		NewExpires: time.Now().Add(sessionTTL), TokenHash: hash, Now: time.Now(), RefreshBefore: time.Now().Add(sessionRefresh)})
+	if err != nil || n != 0 || !expiry().Equal(before) {
+		t.Errorf("expired session touched: n=%d err=%v", n, err)
 	}
 }
 
@@ -270,5 +283,22 @@ func TestSession_TokenNotStoredPlain(t *testing.T) {
 	}
 	if !bytes.Equal(stored, hashToken(l.Token)) || len(stored) != 32 {
 		t.Error("stored value is not sha256(token)")
+	}
+}
+
+func TestDBPr0Lookup_StateErrors(t *testing.T) {
+	pool := testdb.New(t)
+	l := DBPr0Lookup{Q: db.New(pool)}
+	// Missing state is tolerated: the request proceeds (and fails on the
+	// unreachable network, not on the DB).
+	l.BaseURL = "http://127.0.0.1:1"
+	_, err := l.ProfileInfo(context.Background(), "x")
+	if err == nil || strings.Contains(err.Error(), "reading session cookies") {
+		t.Errorf("missing state err = %v", err)
+	}
+	pool.Close()
+	_, err = l.ProfileInfo(context.Background(), "x")
+	if err == nil || !strings.Contains(err.Error(), "reading session cookies") {
+		t.Errorf("closed pool err = %v, want DB error", err)
 	}
 }

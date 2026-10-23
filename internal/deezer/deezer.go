@@ -84,7 +84,7 @@ func (c *Client) DeezerURL(ctx context.Context, isrc string) (string, error) {
 // SearchTrack finds the best Deezer match for artist and title and returns
 // its link and large cover URL, or ErrNotFound.
 func (c *Client) SearchTrack(ctx context.Context, artist, title string) (link, cover string, err error) {
-	q := url.Values{"q": {fmt.Sprintf("artist:%q track:%q", artist, title)}, "limit": {"1"}}
+	q := url.Values{"q": {fmt.Sprintf(`artist:"%s" track:"%s"`, cleanTerm(artist), cleanTerm(title))}, "limit": {"1"}}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+"/search?"+q.Encode(), nil)
 	if err != nil {
 		return "", "", err
@@ -115,5 +115,15 @@ func (c *Client) SearchTrack(ctx context.Context, artist, title string) (link, c
 	if len(r.Data) == 0 || !strings.HasPrefix(r.Data[0].Link, linkPrefix) {
 		return "", "", ErrNotFound
 	}
-	return r.Data[0].Link, r.Data[0].Album.CoverBig, nil
+	cover = r.Data[0].Album.CoverBig
+	if !strings.HasPrefix(cover, "https://") {
+		cover = ""
+	}
+	return r.Data[0].Link, cover, nil
+}
+
+// cleanTerm removes double quotes (which would break out of the quoted
+// search term) and collapses whitespace.
+func cleanTerm(s string) string {
+	return strings.Join(strings.Fields(strings.ReplaceAll(s, `"`, " ")), " ")
 }

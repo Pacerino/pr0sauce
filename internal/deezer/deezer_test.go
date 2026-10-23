@@ -106,3 +106,22 @@ func TestDeezerSearchTrack_NoResult(t *testing.T) {
 		}
 	}
 }
+
+func TestDeezerSearchTrack_QuoteAndCover(t *testing.T) {
+	var q atomic.Value
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q.Store(r.URL.Query().Get("q"))
+		_, _ = w.Write([]byte(`{"data":[{"link":"https://www.deezer.com/track/9","album":{"cover_big":"http://insecure/c.jpg"}}]}`))
+	}))
+	t.Cleanup(srv.Close)
+	_, cover, err := deezer.New(nil, srv.URL).SearchTrack(context.Background(), `AC"DC  `, `Hells "Bells" `+"\n"+`x`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cover != "" {
+		t.Errorf("non-https cover accepted: %q", cover)
+	}
+	if want := `artist:"AC DC" track:"Hells Bells x"`; q.Load() != want {
+		t.Errorf("q = %v, want %v", q.Load(), want)
+	}
+}
